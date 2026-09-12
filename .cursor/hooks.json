@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "PYTHONPATH=src python3 -m agentfabric hook sessionStart"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "PYTHONPATH=src python3 -m agentfabric hook postToolUse"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "PYTHONPATH=src python3 -m agentfabric hook afterShellExecution"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "PYTHONPATH=src python3 -m agentfabric hook afterMCPExecution"
+      }
+    ]
+  }
+}

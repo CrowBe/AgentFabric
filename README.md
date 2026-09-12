@@ -40,8 +40,10 @@ Contracts are durable. Resolvers are disposable. Resolvers in this MVP are trust
 | --- | --- | --- |
 | **AgentSOP Experimental 0.1** | [`agentsop/`](agentsop/) | Semantic contract: capabilities, typed I/O, ResourceRefs, effects, grants, success/failure, resolution, small composition. |
 | **AgentFabric runtime** | [`src/agentfabric/`](src/agentfabric/) | Principals, ResourceRefs, grants, resolvers, invocation, audit. Thin on purpose. |
-| **Binding** | [`src/agentfabric/bindings/mcp.py`](src/agentfabric/bindings/mcp.py) and the CLI | How an existing agent harness talks to the Fabric. Not part of AgentSOP. |
-| **Skill example** | [`skills/journal-review.md`](skills/journal-review.md) | An agentic workflow that *uses* capabilities. Skills are not capabilities. |
+| **Binding** | CLI + [`src/agentfabric/bindings/mcp.py`](src/agentfabric/bindings/mcp.py) | How an existing agent harness talks to the Fabric. Not part of AgentSOP. |
+| **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. |
+| **Hooks** | [`.cursor/hooks.json`](.cursor/hooks.json) | Observe fallback/shell and remind the agent to crystallise. Do not block the escape hatch. |
+| **Conventions** | [`agentsop/CONVENTIONS.md`](agentsop/CONVENTIONS.md) | How to add a capability without leaking locators or widening authority. |
 
 AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapter. A second harness should bind to the same capability documents.
 
@@ -49,17 +51,18 @@ AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapt
 
 ## Quick start
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+The intended path is: clone, `cd` into the repo with an agent harness, run **`/set-up`**.
 
-agentfabric init --force
-agentfabric inspect
-agentfabric demo
+That skill installs the package if needed, runs `agentfabric set-up`, and checks that the **core semantic resolvers** are live. It does not grow the catalogue.
+
+```bash
+# equivalent without a harness
+python3 -m pip install -e '.[dev]'
+python3 -m agentfabric set-up
+python3 -m agentfabric inspect
 ```
 
-`agentfabric demo` walks the MVP script: semantic work, authority, ResourceRef boundaries, crystallisation, reuse, and the fallback escape hatch.
+`agentfabric demo` still walks the original MVP script: semantic work, authority, ResourceRef boundaries, crystallisation, reuse, and the fallback escape hatch.
 
 ### Invoke a capability
 
@@ -90,7 +93,7 @@ The MCP binding is stdio JSON-RPC. Point a harness at:
 agentfabric mcp --principal operator
 ```
 
-A Cursor-style snippet lives in [`examples/mcp.json`](examples/mcp.json). Tools:
+Project MCP config lives in [`.cursor/mcp.json`](.cursor/mcp.json). Tools:
 
 | Tool | What it is |
 | --- | --- |
@@ -150,6 +153,7 @@ answers:
 - Which principals exist, and what has been granted?
 - Which resources are known (as refs and labels, not locators)?
 - What was recently invoked?
+- What opportunities to extend the library have been noticed?
 
 ---
 

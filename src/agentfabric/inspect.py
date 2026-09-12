@@ -40,6 +40,15 @@ def render_snapshot(snapshot: dict[str, Any]) -> str:
             f"  {resource['ref']:<20} kind={resource['kind']:<8} label={resource['label']}"
         )
     lines.append("")
+    lines.append("Opportunities")
+    opportunities = snapshot.get("opportunities") or []
+    if not opportunities:
+        lines.append("  (none)")
+    for item in opportunities[-10:]:
+        extra = item.get("capability") or item.get("command") or ""
+        suffix = f"  {extra}" if extra else ""
+        lines.append(f"  {item.get('kind', '?'):<12} {item.get('summary', '')}{suffix}")
+    lines.append("")
     lines.append("Recent invocations")
     invocations = snapshot["invocations"]
     if not invocations:

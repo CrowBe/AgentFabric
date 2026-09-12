@@ -25,6 +25,11 @@ def test_inspect_answers_owner_questions(fabric: Fabric) -> None:
     assert snapshot["grants"]
     assert snapshot["resources"]
     assert snapshot["invocations"]
+    assert snapshot["opportunities"] == []
+    fabric.invoke("operator", "text.word_count", {"text": "one two"})
+    text2 = render_snapshot(fabric.snapshot())
+    assert "Opportunities" in text2
+    assert any(item["capability"] == "text.word_count" for item in fabric.snapshot()["opportunities"])
 
 
 def test_guest_may_inspect(fabric: Fabric) -> None:

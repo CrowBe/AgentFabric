@@ -329,6 +329,15 @@ class Fabric:
                 nested=nested,
             )
         )
+        if not nested and not result.ok and result.error and result.error.code == "UNRESOLVED":
+            from agentfabric.notice import record as record_opportunity
+
+            record_opportunity(
+                self.home,
+                kind="unresolved",
+                summary=f"{capability_id} is in the catalogue but has no resolver",
+                capability=capability_id,
+            )
         return result
 
     def _invoke(
@@ -470,6 +479,15 @@ class Fabric:
             duration_ms=0,
         )
         self.audit.record(record)
+        from agentfabric.notice import record as record_opportunity
+
+        record_opportunity(
+            self.home,
+            kind="fallback",
+            summary="fallback.exec used for work the Fabric does not yet name",
+            detail="Prefer crystallising deterministic fallback into a capability.",
+            command=command,
+        )
         return {
             "ok": completed.returncode == 0,
             "exit_code": completed.returncode,
@@ -483,6 +501,9 @@ class Fabric:
 
     def snapshot(self) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
+        from agentfabric.notice import open_opportunities
+
+        resolved = {cap["id"] for cap in capabilities if cap["status"] == "resolved"}
         return {
             "home": str(self.home),
             "agentsop": "0.1",
@@ -494,6 +515,7 @@ class Fabric:
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
             "invocations": self.audit.recent(50),
+            "opportunities": open_opportunities(self.home, resolved=resolved),
         }
 
 

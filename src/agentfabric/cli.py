@@ -118,6 +118,49 @@ def cmd_demo(ns: argparse.Namespace) -> int:
     return run_demo(Path(ns.home).expanduser().resolve(), as_json=ns.json)
 
 
+def cmd_setup(ns: argparse.Namespace) -> int:
+    from agentfabric.setup import render_setup, setup
+
+    report = setup(Path(ns.home).expanduser().resolve())
+    if ns.json:
+        _print(report, as_json=True)
+    else:
+        sys.stdout.write(render_setup(report))
+    return 0 if report["ok"] else 1
+
+
+def cmd_opportunities(ns: argparse.Namespace) -> int:
+    fabric = _fabric(ns)
+    items = fabric.snapshot()["opportunities"]
+    _print(items, as_json=True)
+    return 0
+
+
+def cmd_scaffold(ns: argparse.Namespace) -> int:
+    from agentfabric.scaffold import scaffold
+
+    path = scaffold(
+        ns.capability,
+        title=ns.title,
+        description=ns.description,
+        force=ns.force,
+    )
+    sys.stdout.write(f"wrote {path}\n")
+    sys.stdout.write("fill input/output, then add a resolver or crystallise. see agentsop/CONVENTIONS.md\n")
+    return 0
+
+
+def cmd_hook(ns: argparse.Namespace) -> int:
+    from agentfabric.hook import _payload, handle
+
+    try:
+        result = handle(ns.event, _payload())
+    except Exception:
+        result = {}
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentfabric",
@@ -166,6 +209,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_demo = sub.add_parser("demo", help="Run the MVP walkthrough against a fresh fabric")
     p_demo.add_argument("--json", action="store_true")
     p_demo.set_defaults(func=cmd_demo)
+
+    p_setup = sub.add_parser("set-up", help="Clone-path setup: init fabric and verify core resolvers")
+    p_setup.add_argument("--json", action="store_true")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_opp = sub.add_parser("opportunities", help="List noticed candidates for new capabilities")
+    p_opp.set_defaults(func=cmd_opportunities)
+
+    p_scaf = sub.add_parser("scaffold", help="Write an unresolved capability document stub")
+    p_scaf.add_argument("capability")
+    p_scaf.add_argument("--title")
+    p_scaf.add_argument("--description")
+    p_scaf.add_argument("--force", action="store_true")
+    p_scaf.set_defaults(func=cmd_scaffold)
+
+    p_hook = sub.add_parser("hook", help="Harness hook entry (stdin JSON, stdout JSON)")
+    p_hook.add_argument("event")
+    p_hook.set_defaults(func=cmd_hook)
 
     return parser
 
