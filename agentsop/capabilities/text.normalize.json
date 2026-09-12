@@ -1,0 +1,29 @@
+{
+  "agentsop": "0.1",
+  "id": "text.normalize",
+  "title": "Normalize text",
+  "description": "Pure transformation: trim edges, collapse internal whitespace, and normalise newlines to \\n. Does not touch resources.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"],
+    "additionalProperties": false
+  },
+  "effects": [],
+  "idempotent": true,
+  "authority": {
+    "resources": [],
+    "effects": []
+  },
+  "depends_on": []
+}

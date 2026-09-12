@@ -1,0 +1,31 @@
+{
+  "agentsop": "0.1",
+  "id": "journal.append",
+  "title": "Append journal entry",
+  "description": "Append a timestamped entry to a journal resource. This is an effectful write; it does not replace prior entries.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" },
+      "entry": { "type": "string" }
+    },
+    "required": ["resource", "entry"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" },
+      "bytes": { "type": "integer" }
+    },
+    "required": ["resource", "bytes"],
+    "additionalProperties": false
+  },
+  "effects": ["append"],
+  "idempotent": false,
+  "authority": {
+    "resources": ["input.resource"],
+    "effects": ["append"]
+  },
+  "depends_on": []
+}

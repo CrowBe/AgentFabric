@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentfabric": {
+      "command": "agentfabric",
+      "args": ["mcp", "--principal", "operator"],
+      "env": {
+        "AGENTFABRIC_HOME": "/absolute/path/to/.fabric"
+      }
+    }
+  }
+}

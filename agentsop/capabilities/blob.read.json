@@ -1,0 +1,30 @@
+{
+  "agentsop": "0.1",
+  "id": "blob.read",
+  "title": "Read blob",
+  "description": "Read the text content of a blob or journal identified by a ResourceRef.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" }
+    },
+    "required": ["resource"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" },
+      "bytes": { "type": "integer" }
+    },
+    "required": ["text", "bytes"],
+    "additionalProperties": false
+  },
+  "effects": ["read"],
+  "idempotent": true,
+  "authority": {
+    "resources": ["input.resource"],
+    "effects": ["read"]
+  },
+  "depends_on": []
+}
