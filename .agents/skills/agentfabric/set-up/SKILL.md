@@ -17,7 +17,8 @@ A working Fabric whose **example resolved catalogue** is bound. These are demo c
 
 - `workspace.discover`
 - `blob.read`
-- `blob.write`
+- `blob.create`
+- `blob.replace`
 - `text.normalize`
 - `journal.append` (example domain)
 - `journal.digest` (example composition)

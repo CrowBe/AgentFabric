@@ -193,7 +193,7 @@ A capability may `depends_on` others. A resolver may invoke **only** those capab
 
 The documents in `capabilities/` are a **demo library for this Fabric**, not AgentSOP primitives.
 
-They exist to exercise the model: discovery, consume, create, a pure transform, an effect, composition, and one unresolved name. `journal` is an example resource kind. A different Fabric may never define a journal.
+They exist to exercise the model: discovery, consume, create, replace, a pure transform, an effect, composition, and one unresolved name. `journal` is an example resource kind. A different Fabric may never define a journal.
 
 ---
 

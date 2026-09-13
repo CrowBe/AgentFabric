@@ -1,8 +1,8 @@
 {
   "agentsop": "0.1",
-  "id": "blob.write",
-  "title": "Write blob",
-  "description": "Create or replace a text resource in the workspace. The fabric chooses the locator from a human label. Returns a ResourceRef. Labels are not paths the caller is entitled to choose.",
+  "id": "blob.create",
+  "title": "Create blob",
+  "description": "Create a new text resource in the workspace. The fabric chooses the locator from a human label. Labels are hints, not paths, and never replace an existing resource. Returns a new ResourceRef.",
   "input": {
     "type": "object",
     "properties": {
@@ -21,11 +21,11 @@
     "required": ["resource"],
     "additionalProperties": false
   },
-  "effects": ["create", "write"],
+  "effects": ["create"],
   "idempotent": false,
   "authority": {
     "resources": [],
-    "effects": ["create", "write"]
+    "effects": ["create"]
   },
   "depends_on": []
 }

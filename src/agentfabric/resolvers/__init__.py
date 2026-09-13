@@ -19,6 +19,9 @@ class ResolverContext(Protocol):
     def issue_ref(self, *, kind: str, locator: Path, label: str) -> dict[str, str]:
         ...
 
+    def create_ref(self, *, kind: str, locator: Path, label: str) -> dict[str, str]:
+        ...
+
     @property
     def workspace(self) -> Path:
         ...

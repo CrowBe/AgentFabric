@@ -2,7 +2,7 @@
 
 This is how AgentFabric grows. Read it before adding a capability or resolver.
 
-The first-run **example** library is small on purpose: discovery, read, write, a pure transform, an effect, and one composition. `journal.*` is an example domain, not an AgentSOP primitive. Everything else should appear because it recurred, not because we anticipated it.
+The first-run **example** library is small on purpose: discovery, read, create, replace, a pure transform, an effect, and one composition. `journal.*` is an example domain, not an AgentSOP primitive. Everything else should appear because it recurred, not because we anticipated it.
 
 ```
 clone → /set-up → example resolvers live
@@ -70,7 +70,8 @@ A resolver is trusted local Python:
 def resolve(ctx, input):
     # ctx.invoke(capability_id, input)  — same Principal, grants still apply
     # ctx.locator(ref)                  — implementation locator, resolvers only
-    # ctx.issue_ref(kind=..., locator=..., label=...)
+    # ctx.issue_ref(kind=..., locator=..., label=...)   # discover/get-or-create; never restamps kind
+    # ctx.create_ref(kind=..., locator=..., label=...)  # mint a new resource; refuses collisions
     return {"count": 3}
 ```
 
@@ -80,7 +81,7 @@ Do not give agents locators. Do not accept locators in capability input.
 
 `operator` has `capability=*`. New capabilities are available to the operator immediately.
 
-`guest` is allowlisted per capability. Do not grant `guest` writes, crystallise, or fallback unless the owner of this Fabric says so.
+`guest` is allowlisted per capability. Do not grant `guest` create, replace, append, crystallise, or fallback unless the owner of this Fabric says so.
 
 ### Tests
 

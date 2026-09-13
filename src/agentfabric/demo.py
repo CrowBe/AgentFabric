@@ -51,10 +51,17 @@ def run_walkthrough(home: Path) -> dict[str, Any]:
 
     created = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {"label": "scratch.md", "text": "scratch from operator\n"},
     ).to_dict()
-    steps["write"] = created
+    steps["create"] = created
+
+    replaced = fabric.invoke(
+        "operator",
+        "blob.replace",
+        {"resource": created["output"]["resource"], "text": "replaced scratch\n"},
+    ).to_dict()
+    steps["replace"] = replaced
 
     appended = fabric.invoke(
         "operator",
@@ -154,11 +161,12 @@ def render_demo(steps: dict[str, Any]) -> str:
         lines.append(f"  {cap_id:22} {status}")
     lines += [
         "",
-        "Semantic execution: discover / read / normalize / write / append / digest",
+        "Semantic execution: discover / read / normalize / create / replace / append / digest",
         f"  discover ok={steps['discover']['ok']}",
         f"  read bytes={steps['read']['bytes']}",
         f"  normalize -> {steps['normalize']['output']['text']!r}",
-        f"  write -> {steps['write']['output']['resource']}",
+        f"  create -> {steps['create']['output']['resource']}",
+        f"  replace -> {steps['replace']['output']['resource']}",
         f"  digest headings={steps['digest']['headings']}",
         "",
         "Authority: operator appends, guest is denied",
