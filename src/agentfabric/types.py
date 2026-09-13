@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -33,8 +34,8 @@ class ResourceRef:
         kind = value.get("kind")
         if not isinstance(ref, str) or not isinstance(kind, str):
             raise InvalidRef("ResourceRef requires string ref and kind")
-        if not ref.startswith("rf_"):
-            raise InvalidRef("ResourceRef.ref is not a fabric-issued handle")
+        if re.match(REF_PATTERN, ref) is None:
+            raise InvalidRef("ResourceRef.ref is not a well-formed fabric handle")
         if not kind:
             raise InvalidRef("ResourceRef.kind must be non-empty")
         return cls(ref=ref, kind=kind)

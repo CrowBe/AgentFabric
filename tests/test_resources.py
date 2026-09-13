@@ -37,7 +37,7 @@ def test_cannot_smuggle_a_locator_in_a_ref(fabric: Fabric) -> None:
         {"resource": {"ref": "rf_deadbeefdead", "kind": "blob", "path": "/etc/passwd"}},
     )
     assert not result.ok
-    assert result.error.code == "INVALID_INPUT"
+    assert result.error.code == "INVALID_REF"
 
 
 def test_create_label_cannot_escape_workspace(fabric: Fabric) -> None:
@@ -154,7 +154,7 @@ def test_replace_rejects_smuggled_locator(fabric: Fabric) -> None:
         {"resource": {**notes, "path": "/etc/passwd"}, "text": "nope"},
     )
     assert not result.ok
-    assert result.error.code == "INVALID_INPUT"
+    assert result.error.code == "INVALID_REF"
 
 
 def test_issue_does_not_restamp_kind_or_identity(tmp_path: Path) -> None:

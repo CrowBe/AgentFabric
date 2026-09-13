@@ -18,6 +18,7 @@ from agentfabric.errors import (
     DependencyFailed,
     FabricError,
     InvalidInput,
+    InvalidRef,
     ResolverError,
     UndeclaredDependency,
     UnknownCapability,
@@ -104,6 +105,8 @@ class InvokeContext:
         )
         if not result.ok:
             assert result.error is not None
+            if result.error.code == "DEPENDENCY_FAILED":
+                raise DependencyFailed(result.error.message)
             raise DependencyFailed(
                 f"{capability_id} failed: {result.error.code}: {result.error.message}"
             )
@@ -449,7 +452,12 @@ class Fabric:
             raise
         except Exception as exc:
             raise ResolverError(f"resolver {binding.label} raised: {exc}") from exc
-        typed_output = validate_against(cap.output, output, path="output")
+        try:
+            typed_output = validate_against(cap.output, output, path="output")
+        except (InvalidInput, InvalidRef) as exc:
+            raise ResolverError(
+                f"resolver {binding.label} returned invalid output: {exc.message}"
+            ) from exc
         result = Result(
             ok=True,
             capability=capability_id,

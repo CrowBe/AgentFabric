@@ -29,6 +29,8 @@ def test_composition_does_not_bypass_grants(fabric: Fabric) -> None:
     result = fabric.invoke("narrow", "journal.digest", {"resource": journal})
     assert not result.ok
     assert result.error.code == "DEPENDENCY_FAILED"
+    assert result.error.message.startswith("blob.read failed: DENIED:")
+    assert "DEPENDENCY_FAILED" not in result.error.message
 
 
 def test_undeclared_nested_invoke_is_rejected(fabric: Fabric) -> None:

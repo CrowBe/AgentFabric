@@ -17,7 +17,7 @@ def test_walkthrough_covers_the_mvp_script(tmp_path: Path) -> None:
     assert steps["append_guest"]["error"]["code"] == "DENIED"
     assert steps["read_guest"]["ok"] is True
     assert steps["manufactured_ref"]["error"]["code"] == "UNKNOWN_RESOURCE"
-    assert steps["sneaked_locator"]["error"]["code"] == "INVALID_INPUT"
+    assert steps["sneaked_locator"]["error"]["code"] == "INVALID_REF"
     assert steps["word_count_unresolved"]["error"]["code"] == "UNRESOLVED"
     assert steps["guest_crystallise"]["ok"] is False
     assert steps["fallback_word_count"]["stdout"] == "3"
