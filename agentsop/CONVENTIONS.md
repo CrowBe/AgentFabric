@@ -40,7 +40,7 @@ If you need a paragraph of reasoning to decide the output, it is not a capabilit
 2. **Name the operation, not the implementation.** `text.word_count` is a capability. `run_wc_dash_w` is not.
 3. **Keep I/O small and strict.** `additionalProperties: false`. Resource handles are ResourceRefs (`$ref: "#/$defs/ResourceRef"`), never paths.
 4. **Declare effects honestly.** Pure transforms use `effects: []`. Do not hide writes.
-5. **Composition does not widen authority.** `depends_on` is the allow-list a resolver may `ctx.invoke`. Undeclared nested invokes fail. Inner invokes are authorized as the same Principal. Do not mint refs inside a resolver to skip discovery.
+5. **Composition does not widen authority.** `depends_on` is the allow-list a resolver may `ctx.invoke`. Undeclared nested invokes fail. Inner invokes are authorized as the same Principal. Do not mint refs inside a resolver to skip discovery. The live catalogue graph is validated at load: every dependency must name an existing capability, and cycles fail with `INVALID_CATALOGUE`.
 6. **Contracts are durable; resolvers are disposable.** Change a resolver freely. Change a document only when the *meaning* changed. If you must break a document, give it a new id.
 
 ### Two ways to land a resolver

@@ -124,7 +124,7 @@ Enough to exercise different parts of the model, small enough to hold in your he
 | `journal.digest` | Example composition via `depends_on` → `blob.read` + `text.normalize` | yes |
 | `text.word_count` | Crystallisation target | **no** |
 
-Composition reuses resolvers. Nested invokes are limited to the parent capability's `depends_on`. It does not mint ResourceRefs and it does not widen authority: inner invocations are authorized as the same Principal.
+Composition reuses resolvers. Nested invokes are limited to the parent capability's `depends_on`. The live catalogue must name every dependency and must be acyclic (`INVALID_CATALOGUE` at load). It does not mint ResourceRefs and it does not widen authority: inner invocations are authorized as the same Principal.
 
 ---
 

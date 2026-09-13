@@ -88,7 +88,7 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
 - **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
 - **`authority.effects`** — effects that must be granted. Usually the same as `effects`.
-- **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references.
+- **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references. Every listed id must exist in the same catalogue, and the graph must be acyclic.
 
 Resolution status is **not** part of the document. Contracts are durable; whether a resolver currently exists is a runtime fact.
 
@@ -184,6 +184,8 @@ AgentSOP does not say who is allowed to register a resolver. That is a fabric tr
 ## Composition
 
 A capability may `depends_on` others. A resolver may invoke **only** those capabilities through the same fabric, so audit, typing, grants, and the declared graph still apply. A runtime that honours 0.1 must reject nested invocations of ids not listed in `depends_on`.
+
+The catalogue-level graph is also a contract. Every `depends_on` entry must name a capability in the same catalogue, and the graph must be acyclic. A runtime that honours 0.1 must reject an invalid catalogue at load (or before a newly scaffolded document is treated as usable) rather than discovering a typo or cycle later during inspection or nested invocation. AgentFabric reports that diagnostic as `INVALID_CATALOGUE`.
 
 0.1 does not include a planner. If a dependency is unresolved, denied, or undeclared, the invocation fails. Derivation must not bypass ResourceRef discovery or authority checks.
 

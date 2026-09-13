@@ -34,6 +34,10 @@ class InvalidInput(FabricError):
     code = "INVALID_INPUT"
 
 
+class InvalidCatalogue(FabricError):
+    code = "INVALID_CATALOGUE"
+
+
 class InvalidRef(FabricError):
     code = "INVALID_REF"
 
