@@ -41,7 +41,7 @@ python3 -m agentfabric opportunities
    - strict input/output (`additionalProperties: false`)
    - ResourceRefs for resources, never paths
    - honest `effects` and `authority`
-   - `depends_on` only if the resolver will `ctx.invoke` those ids
+   - `depends_on` only if the resolver will `ctx.invoke` those ids (they must already exist in the catalogue; the graph must stay acyclic)
 3. Implement a resolver (`crystallise` into `.fabric/resolvers/`).
 4. Grant `guest` only if the owner wants that; `operator` already has `*`.
 5. Only if it should **ship upstream**: `scaffold --ship`, add a builtin resolver, and a Fabric-level test. That is a contribution, not local evolution.

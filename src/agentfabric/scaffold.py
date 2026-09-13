@@ -7,7 +7,13 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from agentfabric.catalogue import find_agentsop_root, load_capability_dir, overlay_dir
+from agentfabric.catalogue import (
+    find_agentsop_root,
+    load_capability_dir,
+    merge_catalogue,
+    overlay_dir,
+    validate_dependency_graph,
+)
 from agentfabric.errors import InvalidInput
 from agentfabric.schema import validate_capability_document
 from agentfabric.types import CAPABILITY_ID_PATTERN
@@ -73,7 +79,16 @@ def scaffold(
         "authority": {"resources": [], "effects": []},
         "depends_on": [],
     }
-    validate_capability_document(doc, source=str(path))
+    cap = validate_capability_document(doc, source=str(path))
+    if layer == "local":
+        overlay = dict(local)
+        overlay[capability_id] = cap
+        projected = merge_catalogue(upstream, overlay)
+    else:
+        shipped = dict(upstream)
+        shipped[capability_id] = cap
+        projected = merge_catalogue(shipped, local)
+    validate_dependency_graph(projected.capabilities)
     directory.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     return path

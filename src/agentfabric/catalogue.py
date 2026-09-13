@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from agentfabric.errors import InvalidInput
+from agentfabric.errors import InvalidCatalogue, InvalidInput
 from agentfabric.schema import validate_capability_document
 from agentfabric.types import Capability
 
@@ -47,7 +47,53 @@ def load_capability_dir(directory: Path) -> dict[str, Capability]:
 
 def load_capabilities(sop_root: Path | None = None) -> dict[str, Capability]:
     root = sop_root if sop_root is not None else find_agentsop_root()
-    return load_capability_dir(root / "capabilities")
+    loaded = load_capability_dir(root / "capabilities")
+    validate_dependency_graph(loaded)
+    return loaded
+
+
+def validate_dependency_graph(capabilities: dict[str, Capability]) -> None:
+    """Reject dangling `depends_on` entries and cycles in a live catalogue."""
+    known = set(capabilities)
+    dangling = sorted(
+        {
+            (cap_id, dep)
+            for cap_id, cap in capabilities.items()
+            for dep in cap.depends_on
+            if dep not in known
+        }
+    )
+    if dangling:
+        details = "; ".join(
+            f"{cap_id} depends_on unknown capability {dep!r}" for cap_id, dep in dangling
+        )
+        raise InvalidCatalogue(details)
+
+    white, gray, black = 0, 1, 2
+    color = {cap_id: white for cap_id in capabilities}
+    stack: list[str] = []
+
+    def dfs(node: str) -> list[str] | None:
+        color[node] = gray
+        stack.append(node)
+        for dep in capabilities[node].depends_on:
+            if color[dep] == gray:
+                start = stack.index(dep)
+                return stack[start:] + [dep]
+            if color[dep] == white:
+                found = dfs(dep)
+                if found is not None:
+                    return found
+        stack.pop()
+        color[node] = black
+        return None
+
+    for cap_id in sorted(capabilities):
+        if color[cap_id] != white:
+            continue
+        cycle = dfs(cap_id)
+        if cycle is not None:
+            raise InvalidCatalogue(f"capability dependency cycle: {' -> '.join(cycle)}")
 
 
 def document_digest(doc: dict[str, Any]) -> str:

@@ -13,6 +13,7 @@ from agentfabric.catalogue import (
     load_capability_dir,
     merge_catalogue,
     overlay_dir,
+    validate_dependency_graph,
 )
 from agentfabric.errors import (
     DependencyFailed,
@@ -164,6 +165,7 @@ class Fabric:
             upstream_owned=owned,
             holds=holds,
         )
+        validate_dependency_graph(catalogue.capabilities)
         self.capabilities: dict[str, Capability] = catalogue.capabilities
         self.capability_origins = catalogue.origins
         self.catalogue_collisions = list(catalogue.collisions)
