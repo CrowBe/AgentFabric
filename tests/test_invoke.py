@@ -23,6 +23,17 @@ def test_semantic_loop_discover_read_transform_write(fabric: Fabric) -> None:
     assert written.ok
     reread = fabric.invoke("operator", "blob.read", {"resource": written.output["resource"]})
     assert reread.output["text"] == "A B"
+    replaced = fabric.invoke(
+        "operator",
+        "blob.replace",
+        {"resource": written.output["resource"], "text": "B A"},
+    )
+    assert replaced.ok
+    assert replaced.output["resource"] == written.output["resource"]
+    reread_replaced = fabric.invoke(
+        "operator", "blob.read", {"resource": written.output["resource"]}
+    )
+    assert reread_replaced.output["text"] == "B A"
 
 
 def test_unknown_capability(fabric: Fabric) -> None:

@@ -70,7 +70,8 @@ A resolver is trusted local Python:
 def resolve(ctx, input):
     # ctx.invoke(capability_id, input)  — same Principal, grants still apply
     # ctx.locator(ref)                  — implementation locator, resolvers only
-    # ctx.issue_ref(kind=..., locator=..., label=...)
+    # ctx.issue_ref(kind=..., locator=..., label=...)   # discover/get-or-create; never restamps kind
+    # ctx.create_ref(kind=..., locator=..., label=...)  # mint a new resource; refuses collisions
     return {"count": 3}
 ```
 

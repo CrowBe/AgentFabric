@@ -20,7 +20,7 @@ from agentfabric.errors import (
 from agentfabric.grants import Authority
 from agentfabric.ids import new_invocation_id
 from agentfabric.resolvers import ResolverBinding, ResolverFn, load_python_resolver
-from agentfabric.resolvers import blob_read, blob_write, journal_append, journal_digest
+from agentfabric.resolvers import blob_read, blob_replace, blob_write, journal_append, journal_digest
 from agentfabric.resolvers import text_normalize, workspace_discover
 from agentfabric.resources import ResourceRegistry, _is_inside
 from agentfabric.schema import extract_resource_refs, validate_against
@@ -39,6 +39,7 @@ BUILTIN_RESOLVERS: dict[str, tuple[str, ResolverFn]] = {
     "workspace.discover": ("builtin:workspace.discover", workspace_discover.resolve),
     "blob.read": ("builtin:blob.read", blob_read.resolve),
     "blob.write": ("builtin:blob.write", blob_write.resolve),
+    "blob.replace": ("builtin:blob.replace", blob_replace.resolve),
     "text.normalize": ("builtin:text.normalize", text_normalize.resolve),
     "journal.append": ("builtin:journal.append", journal_append.resolve),
     "journal.digest": ("builtin:journal.digest", journal_digest.resolve),
@@ -107,6 +108,15 @@ class InvokeContext:
 
     def issue_ref(self, *, kind: str, locator: Path, label: str, created_by: str | None = None) -> dict[str, str]:
         record = self._fabric.resources.issue(
+            kind=kind,
+            label=label,
+            locator=locator,
+            created_by=created_by or self.principal,
+        )
+        return record.public_ref().to_dict()
+
+    def create_ref(self, *, kind: str, locator: Path, label: str, created_by: str | None = None) -> dict[str, str]:
+        record = self._fabric.resources.create(
             kind=kind,
             label=label,
             locator=locator,

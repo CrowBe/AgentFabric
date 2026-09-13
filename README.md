@@ -115,7 +115,8 @@ Enough to exercise different parts of the model, small enough to hold in your he
 | --- | --- | --- |
 | `workspace.discover` | Resource discovery; introduces ResourceRefs | yes |
 | `blob.read` | Resource consumption | yes |
-| `blob.write` | Resource creation; fabric chooses the locator | yes |
+| `blob.write` | Resource creation; fabric chooses the locator; never replaces | yes |
+| `blob.replace` | Ref-scoped mutation of an existing blob | yes |
 | `text.normalize` | Pure transformation, no resource | yes |
 | `journal.append` | Example effectful operation | yes |
 | `journal.digest` | Example composition via `depends_on` → `blob.read` + `text.normalize` | yes |
@@ -130,13 +131,13 @@ Composition reuses resolvers. Nested invokes are limited to the parent capabilit
 A fresh Fabric has two principals:
 
 - **`operator`** — all capabilities, plus privileges `inspect`, `crystallise`, `fallback`
-- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot write, append, crystallise, or use the fallback.
+- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot create, replace, append, crystallise, or use the fallback.
 
 ```
 knowing a locator  ≠  possessing a ResourceRef  ≠  having authority to act on it
 ```
 
-`blob.write` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE`. Extra fields such as `path` fail with `INVALID_INPUT`.
+`blob.write` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE`. Extra fields such as `path` fail with `INVALID_INPUT`.
 
 The owner of the Fabric chooses the trust model. AgentFabric only provides the mechanism.
 

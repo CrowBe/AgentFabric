@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agentfabric.errors import KindMismatch, UnknownResource
+from agentfabric.errors import Denied, KindMismatch, UnknownResource
 from agentfabric.ids import new_ref
 from agentfabric.store import read_json, write_json
 from agentfabric.types import ResourceRecord, ResourceRef
@@ -53,6 +53,12 @@ class ResourceRegistry:
                 return record
         return None
 
+    def locator_taken(self, locator: Path) -> bool:
+        resolved = locator.resolve()
+        if resolved.exists():
+            return True
+        return self.find_by_locator(locator) is not None
+
     def issue(
         self,
         *,
@@ -63,11 +69,33 @@ class ResourceRegistry:
     ) -> ResourceRecord:
         existing = self.find_by_locator(locator)
         if existing is not None:
-            if existing.kind != kind:
-                existing.kind = kind
-            existing.label = label
-            self._save()
             return existing
+        return self._insert(kind=kind, label=label, locator=locator, created_by=created_by)
+
+    def create(
+        self,
+        *,
+        kind: str,
+        label: str,
+        locator: Path,
+        created_by: str,
+    ) -> ResourceRecord:
+        existing = self.find_by_locator(locator)
+        if existing is not None:
+            raise Denied(
+                "create cannot occupy an existing resource locator; "
+                "mutation requires a ResourceRef and write authority"
+            )
+        return self._insert(kind=kind, label=label, locator=locator, created_by=created_by)
+
+    def _insert(
+        self,
+        *,
+        kind: str,
+        label: str,
+        locator: Path,
+        created_by: str,
+    ) -> ResourceRecord:
         record = ResourceRecord(
             ref=new_ref(),
             kind=kind,

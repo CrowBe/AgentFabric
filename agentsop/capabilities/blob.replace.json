@@ -1,0 +1,30 @@
+{
+  "agentsop": "0.1",
+  "id": "blob.replace",
+  "title": "Replace blob",
+  "description": "Replace the text of an existing blob identified by a ResourceRef. Mutation is always ref-addressed and authorized against that resource. It does not create a resource or change its kind.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" },
+      "text": { "type": "string" }
+    },
+    "required": ["resource", "text"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" }
+    },
+    "required": ["resource"],
+    "additionalProperties": false
+  },
+  "effects": ["write"],
+  "idempotent": false,
+  "authority": {
+    "resources": ["input.resource"],
+    "effects": ["write"]
+  },
+  "depends_on": []
+}
