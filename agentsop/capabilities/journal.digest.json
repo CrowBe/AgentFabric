@@ -1,0 +1,31 @@
+{
+  "agentsop": "0.1",
+  "id": "journal.digest",
+  "title": "Digest journal",
+  "description": "Compose blob.read and text.normalize to produce a short digest of a journal: headings, character count, and a normalized excerpt. Does not bypass ResourceRef discovery or grants; inner invocations are authorized as the same Principal.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" }
+    },
+    "required": ["resource"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" },
+      "headings": { "type": "array", "items": { "type": "string" } },
+      "chars": { "type": "integer" }
+    },
+    "required": ["text", "headings", "chars"],
+    "additionalProperties": false
+  },
+  "effects": ["read"],
+  "idempotent": true,
+  "authority": {
+    "resources": ["input.resource"],
+    "effects": ["read"]
+  },
+  "depends_on": ["blob.read", "text.normalize"]
+}

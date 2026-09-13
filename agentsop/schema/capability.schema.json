@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentfabric.dev/agentsop/0.1/capability.schema.json",
+  "title": "AgentSOP Capability 0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agentsop",
+    "id",
+    "title",
+    "description",
+    "input",
+    "output",
+    "effects",
+    "idempotent",
+    "authority",
+    "depends_on"
+  ],
+  "$defs": {
+    "ResourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "kind"],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^rf_[a-z0-9]+$",
+          "description": "Opaque fabric-issued handle. Not a locator."
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Coarse semantic class, e.g. blob or journal."
+        }
+      }
+    },
+    "jsonSchema": {
+      "type": "object",
+      "description": "JSON Schema subset used by AgentSOP 0.1 inputs and outputs."
+    }
+  },
+  "properties": {
+    "agentsop": { "const": "0.1" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "input": { "$ref": "#/$defs/jsonSchema" },
+    "output": { "$ref": "#/$defs/jsonSchema" },
+    "effects": {
+      "type": "array",
+      "description": "Closed AgentSOP 0.1 vocabulary. Adding an effect is a schema revision, not an ad-hoc implementation extension.",
+      "items": {
+        "type": "string",
+        "enum": ["discover", "read", "create", "write", "append"]
+      }
+    },
+    "idempotent": { "type": "boolean" },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resources", "effects"],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Input paths to ResourceRefs, e.g. input.resource. Empty if none."
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["discover", "read", "create", "write", "append"]
+          }
+        }
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+      }
+    }
+  }
+}

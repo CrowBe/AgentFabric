@@ -1,0 +1,29 @@
+{
+  "agentsop": "0.1",
+  "id": "text.word_count",
+  "title": "Count words",
+  "description": "Count whitespace-separated words in a text value. Present in the catalogue so it can be invoked semantically once a resolver is crystallised. Ships unresolved in a fresh Fabric.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "count": { "type": "integer" }
+    },
+    "required": ["count"],
+    "additionalProperties": false
+  },
+  "effects": [],
+  "idempotent": true,
+  "authority": {
+    "resources": [],
+    "effects": []
+  },
+  "depends_on": []
+}

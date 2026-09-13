@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentfabric": {
+      "command": "python3",
+      "args": ["-m", "agentfabric", "mcp", "--principal", "operator"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  }
+}
