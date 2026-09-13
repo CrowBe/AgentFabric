@@ -130,6 +130,8 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
+        # Process-local only. Persistent replay is deferred until an effectful
+        # idempotent capability needs it. The CLI must not advertise this key.
         self._idempotency: dict[str, Result] = {}
         self._resolution = read_json(self.home / "resolution.json", {})
         self._bindings = self._load_bindings()
