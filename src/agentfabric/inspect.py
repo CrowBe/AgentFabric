@@ -8,14 +8,23 @@ from agentfabric.types import ResolutionStatus
 def render_snapshot(snapshot: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"AgentFabric  home={snapshot['home']}  agentsop={snapshot['agentsop']}")
+    ownership = snapshot.get("ownership") or {}
+    if ownership:
+        commit = ownership.get("upstream_commit") or "—"
+        local = ownership.get("local_capabilities") or []
+        lines.append(
+            f"Ownership    upstream_commit={commit}  local={len(local)}  "
+            f"last_sync_ok={ownership.get('last_sync_ok')}"
+        )
     lines.append("")
     lines.append("Capabilities")
     for cap in snapshot["capabilities"]:
         status: ResolutionStatus = cap["status"]
         resolver = cap["resolver"] or "—"
+        origin = cap.get("origin") or "upstream"
         deps = f"  depends_on={','.join(cap['depends_on'])}" if cap["depends_on"] else ""
         lines.append(
-            f"  {cap['id']:<22} {status:<11} resolver={resolver}{deps}"
+            f"  {cap['id']:<22} {status:<11} origin={origin:<8} resolver={resolver}{deps}"
         )
         lines.append(f"    {cap['title']}")
     lines.append("")
@@ -39,6 +48,14 @@ def render_snapshot(snapshot: dict[str, Any]) -> str:
         lines.append(
             f"  {resource['ref']:<20} kind={resource['kind']:<8} label={resource['label']}"
         )
+    lines.append("")
+    conflicts = ownership.get("conflicts") or []
+    lines.append("Sync conflicts")
+    if not conflicts:
+        lines.append("  (none)")
+    for item in conflicts:
+        cap = item.get("capability") or item.get("path") or ""
+        lines.append(f"  {item.get('kind', '?'):<22} {cap}  {item.get('message', '')}")
     lines.append("")
     lines.append("Opportunities")
     opportunities = snapshot.get("opportunities") or []

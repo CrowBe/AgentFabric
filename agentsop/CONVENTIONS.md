@@ -57,12 +57,21 @@ agentfabric crystallise text.word_count --source-file path/to/resolver.py
 
 ```bash
 agentfabric scaffold text.hash --title "Hash text" --description "SHA-256 of a text value."
-# edit agentsop/capabilities/text.hash.json — fill input/output
-# then either:
-#   a) crystallise into .fabric/resolvers/  (environment-specific)
-#   b) add src/agentfabric/resolvers/text_hash.py and register it in
-#      agentfabric.fabric.BUILTIN_RESOLVERS  (ships with the repo)
+# writes .fabric/capabilities/text.hash.json  (local overlay, not git)
+# edit that document — fill input/output
+# then crystallise into .fabric/resolvers/  (environment-specific)
 ```
+
+If the capability should **ship with the repository**, that is an upstream contribution, not local Fabric evolution:
+
+```bash
+agentfabric scaffold text.hash --ship --title "Hash text" --description "SHA-256 of a text value."
+# writes agentsop/capabilities/text.hash.json  (dirties git on purpose)
+# add src/agentfabric/resolvers/text_hash.py and register it in
+# agentfabric.fabric.BUILTIN_RESOLVERS
+```
+
+Do not edit git-tracked repository files to store machine-specific behaviour. That includes contracts and runtime (`agentsop/`, `src/agentfabric/`) as well as skills, docs, tests, and packaging. Recurring Git merge friction is a signal that local evolution crossed the ownership boundary.
 
 A resolver is trusted local Python:
 
@@ -98,3 +107,34 @@ If the capability ships in-repo, add a test that:
 This is harness behaviour, not AgentSOP. This repo's Cursor adapter (`.cursor/hooks.json`) notices `fallback.exec`, unresolved catalogue entries, and shell that looks like a deterministic transform (`python -c`, `wc`, `jq`, checksums, …). Other harnesses can ignore those files. Hooks do not block the escape hatch.
 
 When they fire, follow this file rather than repeating the implementation.
+
+---
+
+## Ownership and upstream sync
+
+An installed Fabric is expected to evolve locally while the AgentFabric repository continues to change. Those are different owners:
+
+| Owner | Lives in | Typical contents |
+| --- | --- | --- |
+| **Upstream** | git-tracked repository content | Everything the project ships: contracts, runtime, skills, docs, tests, packaging, config. `agentsop/` and `src/agentfabric/` are the semantic core, not the whole surface. |
+| **Local Fabric** | `.fabric/` (gitignored) | Overlay contracts, crystallised resolvers, grants, workspace, origin pin |
+
+Routine local extension must not require a dirty working tree. `agentfabric scaffold` writes the overlay. `crystallise` writes `.fabric/resolvers/`. Do not store machine-specific behaviour in git-tracked files.
+
+After the git-tracked project has been updated (`git pull` / merge — not `.fabric/`):
+
+```bash
+agentfabric sync
+```
+
+Sync does **not** merge Git. It:
+
+1. Diffs the current upstream catalogue against the Fabric's origin pin.
+2. Keeps local overlay behaviour unless you intentionally supersede it.
+3. Surfaces genuine conflicts (`id_collision`, `stale_local_resolver`, `capability_removed`) instead of producing a clean Git state. Unresolved conflicts stay visible on later syncs until the local/upstream state actually changes.
+4. Records ownership leaks (dirty git-tracked paths outside `.fabric/`) as feedback that the boundary was crossed.
+5. Leaves the Fabric inspectable either way.
+
+On an id collision where this Fabric named the capability first, the overlay stays live until you rename it (keep local) or remove it (adopt upstream). On an overlay of an already-owned upstream id, the shipped contract stays live.
+
+If the same conflict keeps coming back, the fix is the ownership split above, not a more aggressive merge. See `/sync-upstream`.

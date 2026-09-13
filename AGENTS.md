@@ -12,4 +12,4 @@ That is the first step. It installs the package if needed, initialises `.fabric/
 4. Skills live under `.agents/skills/agentfabric/`. They are workflows, not capabilities.
 5. `.cursor/hooks.json` and `.cursor/mcp.json` are **this repo's Cursor harness adapter**, not part of AgentSOP. They observe gaps and must not block general-purpose execution.
 
-`/set-up` is explicit. `notice-gap` and `extend-library` apply when relevant.
+`/set-up` is explicit. `notice-gap` and `extend-library` apply when relevant. After pulling upstream, `/sync-upstream` reconciles a locally evolved Fabric without merging away conflicts.

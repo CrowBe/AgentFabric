@@ -119,6 +119,7 @@ class McpBinding:
                     "effects": view.effects,
                     "status": view.status,
                     "resolver": view.resolver,
+                    "origin": view.origin,
                     "depends_on": view.depends_on,
                     "idempotent": view.idempotent,
                 }

@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from agentfabric.audit import AuditLog, preview, utc_now
-from agentfabric.catalogue import find_agentsop_root, load_capabilities
+from agentfabric.catalogue import (
+    digest_capability,
+    find_agentsop_root,
+    load_capability_dir,
+    merge_catalogue,
+    overlay_dir,
+)
 from agentfabric.errors import (
     DependencyFailed,
     FabricError,
@@ -25,6 +31,7 @@ from agentfabric.resolvers import text_normalize, workspace_discover
 from agentfabric.resources import ResourceRegistry, _is_inside
 from agentfabric.schema import extract_resource_refs, validate_against
 from agentfabric.store import read_json, write_json
+from agentfabric.sync import read_origin, record_origin
 from agentfabric.types import (
     Capability,
     ErrorBody,
@@ -69,6 +76,7 @@ class CapabilityView:
     depends_on: list[str]
     status: ResolutionStatus
     resolver: str | None
+    origin: str = "upstream"
 
 
 class InvokeContext:
@@ -130,8 +138,31 @@ class Fabric:
         self.home = Path(home).resolve()
         self.workspace = self.home / "workspace"
         self.resolvers_dir = self.home / "resolvers"
+        self.capabilities_dir = overlay_dir(self.home)
         self.sop_root = sop_root or find_agentsop_root(self.home)
-        self.capabilities: dict[str, Capability] = load_capabilities(self.sop_root)
+        origin = read_origin(self.home)
+        upstream_meta = origin.get("upstream") if isinstance(origin.get("upstream"), dict) else {}
+        accepted_meta = origin.get("accepted") if isinstance(origin.get("accepted"), dict) else {}
+        pinned = accepted_meta or upstream_meta.get("capabilities")
+        owned = set(pinned) if isinstance(pinned, dict) and pinned else None
+        last_sync = origin.get("last_sync") if isinstance(origin.get("last_sync"), dict) else {}
+        holds = {
+            item.get("capability")
+            for item in (last_sync.get("conflicts") or [])
+            if isinstance(item, dict)
+            and item.get("kind") == "id_collision"
+            and item.get("live") == "local"
+            and isinstance(item.get("capability"), str)
+        }
+        catalogue = merge_catalogue(
+            load_capability_dir(self.sop_root / "capabilities"),
+            load_capability_dir(self.capabilities_dir),
+            upstream_owned=owned,
+            holds=holds,
+        )
+        self.capabilities: dict[str, Capability] = catalogue.capabilities
+        self.capability_origins = catalogue.origins
+        self.catalogue_collisions = list(catalogue.collisions)
         state = read_json(self.home / "fabric.json", {})
         self.principals = {
             item["id"]: Principal(id=item["id"], privileges=list(item.get("privileges", [])))
@@ -174,6 +205,7 @@ class Fabric:
         workspace = home / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
         (home / "resolvers").mkdir(parents=True, exist_ok=True)
+        overlay_dir(home).mkdir(parents=True, exist_ok=True)
         write_json(
             home / "fabric.json",
             {
@@ -242,6 +274,7 @@ class Fabric:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
                 path.write_text(content, encoding="utf-8")
+        record_origin(home, sop_root=sop_root or find_agentsop_root(home))
         fabric = cls(home, sop_root=sop_root)
         fabric.invoke("operator", "workspace.discover", {})
         return fabric
@@ -304,6 +337,7 @@ class Fabric:
             depends_on=list(cap.depends_on),
             status=status,
             resolver=resolver,
+            origin=self.capability_origins.get(capability_id, "upstream"),
         )
 
     def invoke(
@@ -448,6 +482,7 @@ class Fabric:
             "path": rel,
             "crystallised_by": principal,
             "crystallised_at": utc_now(),
+            "contract_digest": digest_capability(cap),
         }
         write_json(self.home / "resolution.json", self._resolution)
         self._bindings[capability_id] = ResolverBinding(
@@ -523,9 +558,38 @@ class Fabric:
         from agentfabric.notice import open_opportunities
 
         resolved = {cap["id"] for cap in capabilities if cap["status"] == "resolved"}
+        origin = read_origin(self.home)
+        last_sync = origin.get("last_sync") if isinstance(origin.get("last_sync"), dict) else {}
+        local_ids = sorted(
+            cap_id for cap_id, layer in self.capability_origins.items() if layer == "local"
+        )
+        upstream_meta = origin.get("upstream") if isinstance(origin.get("upstream"), dict) else {}
+        conflicts = list(last_sync.get("conflicts") or [])
+        if not conflicts and self.catalogue_collisions:
+            conflicts = [
+                {
+                    "kind": "id_collision",
+                    "capability": cap_id,
+                    "live": self.capability_origins.get(cap_id, "upstream"),
+                    "message": (
+                        f"{cap_id} exists in both upstream and the local overlay; "
+                        "run `agentfabric sync` to record the decision point"
+                    ),
+                }
+                for cap_id in self.catalogue_collisions
+            ]
         return {
             "home": str(self.home),
             "agentsop": "0.1",
+            "ownership": {
+                "upstream_commit": upstream_meta.get("commit"),
+                "local_capabilities": local_ids,
+                "collisions": list(self.catalogue_collisions),
+                "conflicts": conflicts,
+                "feedback": list(last_sync.get("feedback") or []),
+                "last_sync_ok": last_sync.get("ok"),
+                "last_sync_at": last_sync.get("at"),
+            },
             "capabilities": capabilities,
             "principals": [
                 {"id": p.id, "privileges": list(p.privileges)}

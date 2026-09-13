@@ -20,6 +20,8 @@ def test_inspect_answers_owner_questions(fabric: Fabric) -> None:
     resolved = next(cap for cap in snapshot["capabilities"] if cap["id"] == "blob.read")
     assert resolved["status"] == "resolved"
     assert resolved["resolver"] == "builtin:blob.read"
+    assert resolved["origin"] == "upstream"
+    assert snapshot["ownership"]["local_capabilities"] == []
     principal_ids = {p["id"] for p in snapshot["principals"]}
     assert principal_ids == {"operator", "guest"}
     assert snapshot["grants"]

@@ -134,15 +134,42 @@ def cmd_opportunities(ns: argparse.Namespace) -> int:
 def cmd_scaffold(ns: argparse.Namespace) -> int:
     from agentfabric.scaffold import scaffold
 
+    layer = "upstream" if ns.ship else "local"
     path = scaffold(
         ns.capability,
         title=ns.title,
         description=ns.description,
         force=ns.force,
+        home=Path(ns.home).expanduser().resolve(),
+        layer=layer,
     )
     sys.stdout.write(f"wrote {path}\n")
-    sys.stdout.write("fill input/output, then add a resolver or crystallise. see agentsop/CONVENTIONS.md\n")
+    if layer == "local":
+        sys.stdout.write(
+            "local overlay — fill input/output, then crystallise. "
+            "this does not dirty the upstream git tree. see agentsop/CONVENTIONS.md\n"
+        )
+    else:
+        sys.stdout.write(
+            "upstream document — this dirties the git tree on purpose. "
+            "fill input/output, then add a builtin resolver if it should ship. "
+            "see agentsop/CONVENTIONS.md\n"
+        )
     return 0
+
+
+def cmd_sync(ns: argparse.Namespace) -> int:
+    from agentfabric.sync import render_sync, sync_fabric
+
+    report = sync_fabric(
+        Path(ns.home).expanduser().resolve(),
+        apply=not ns.check,
+    )
+    if ns.json:
+        _print(report, as_json=True)
+    else:
+        sys.stdout.write(render_sync(report))
+    return 0 if report["ok"] else 1
 
 
 def cmd_hook(ns: argparse.Namespace) -> int:
@@ -214,12 +241,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_opp = sub.add_parser("opportunities", help="List noticed candidates for new capabilities")
     p_opp.set_defaults(func=cmd_opportunities)
 
-    p_scaf = sub.add_parser("scaffold", help="Write an unresolved capability document stub")
+    p_scaf = sub.add_parser(
+        "scaffold",
+        help="Write an unresolved capability document (local overlay by default)",
+    )
     p_scaf.add_argument("capability")
     p_scaf.add_argument("--title")
     p_scaf.add_argument("--description")
     p_scaf.add_argument("--force", action="store_true")
+    p_scaf.add_argument(
+        "--ship",
+        action="store_true",
+        help="Write into agentsop/capabilities/ to contribute upstream (dirties git)",
+    )
     p_scaf.set_defaults(func=cmd_scaffold)
+
+    p_sync = sub.add_parser(
+        "sync",
+        help="Reconcile this Fabric with the current upstream catalogue without merging Git",
+    )
+    p_sync.add_argument("--json", action="store_true")
+    p_sync.add_argument(
+        "--check",
+        action="store_true",
+        help="Report drift and conflicts without updating the origin pin",
+    )
+    p_sync.set_defaults(func=cmd_sync)
 
     p_hook = sub.add_parser("hook", help="Harness hook entry (stdin JSON, stdout JSON)")
     p_hook.add_argument("event")

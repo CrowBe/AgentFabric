@@ -41,9 +41,9 @@ Contracts are durable. Resolvers are disposable. Resolvers in this MVP are trust
 | **AgentSOP Experimental 0.1** | [`agentsop/`](agentsop/) | Semantic contract: capabilities, typed I/O, ResourceRefs, effects, grants, success/failure, resolution, small composition. |
 | **AgentFabric runtime** | [`src/agentfabric/`](src/agentfabric/) | Principals, ResourceRefs, grants, resolvers, invocation, audit. Thin on purpose. |
 | **Binding** | CLI + [`src/agentfabric/bindings/mcp.py`](src/agentfabric/bindings/mcp.py) | How an existing agent harness talks to the Fabric. Not part of AgentSOP. |
-| **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. Not part of AgentSOP. |
+| **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. `/sync-upstream` reconciles a locally evolved Fabric. Not part of AgentSOP. |
 | **Hooks** | [`.cursor/hooks.json`](.cursor/hooks.json) | Cursor harness adapter: observe fallback/shell and remind the agent to crystallise. Not part of AgentSOP; do not block the escape hatch. |
-| **Conventions** | [`agentsop/CONVENTIONS.md`](agentsop/CONVENTIONS.md) | How to add a capability without leaking locators or widening authority. |
+| **Conventions** | [`agentsop/CONVENTIONS.md`](agentsop/CONVENTIONS.md) | How to add a capability without leaking locators or widening authority. Local overlay vs upstream shipping, and `agentfabric sync`. |
 
 AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapter. A second harness should bind to the same capability documents.
 
@@ -61,6 +61,8 @@ python3 -m pip install -e '.[dev]'
 python3 -m agentfabric set-up
 python3 -m agentfabric inspect
 ```
+
+Local evolution stays inside `.fabric/` (gitignored): overlay capability documents, crystallised resolvers, grants, workspace. Git-tracked repository content is upstream-owned. After pulling upstream changes into the git tree, run `agentfabric sync` — it reconciles catalogues and surfaces semantic conflicts; it does not merge Git.
 
 `agentfabric demo` still walks the original MVP script: semantic work, authority, ResourceRef boundaries, crystallisation, reuse, and the fallback escape hatch.
 
@@ -157,6 +159,13 @@ answers:
 - Which resources are known (as refs and labels, not locators)?
 - What was recently invoked?
 - What opportunities to extend the library have been noticed?
+- What is upstream-owned vs local overlay, and are there sync conflicts?
+
+After the git tree has been updated with upstream commits:
+
+```bash
+agentfabric sync
+```
 
 ---
 
@@ -169,6 +178,7 @@ The MVP is trying to learn whether this shape is useful:
 - Can grants sit around capabilities and resources without collapsing into ambient access?
 - Do ResourceRefs separate semantic resources from locators?
 - Can capabilities stay small and deterministic while skills compose them?
+- Can a Fabric evolve locally and still take upstream improvements without a Git merge of machine-specific behaviour?
 
 Explicitly deferred: completeness, resolver marketplaces, competing resolvers, planning, sandboxing, credential custody, polished UI, production security.
 
