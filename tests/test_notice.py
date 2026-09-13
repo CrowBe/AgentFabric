@@ -66,6 +66,7 @@ def test_scaffold_writes_valid_document(tmp_path: Path) -> None:
         title="Hash text",
         description="SHA-256 of a text value.",
         sop_root=root,
+        layer="upstream",
     )
     doc = json.loads(path.read_text(encoding="utf-8"))
     cap = validate_capability_document(doc)

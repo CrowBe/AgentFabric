@@ -36,14 +36,15 @@ python3 -m agentfabric opportunities
 ## Path B — no name yet
 
 1. `python3 -m agentfabric scaffold <dotted.id> --title "..." --description "..."`
-2. Edit `agentsop/capabilities/<dotted.id>.json`:
+   (writes `.fabric/capabilities/<dotted.id>.json`, not the git tree)
+2. Edit that overlay document:
    - strict input/output (`additionalProperties: false`)
    - ResourceRefs for resources, never paths
    - honest `effects` and `authority`
    - `depends_on` only if the resolver will `ctx.invoke` those ids
-3. Implement a resolver (crystallise and/or builtin).
+3. Implement a resolver (`crystallise` into `.fabric/resolvers/`).
 4. Grant `guest` only if the owner wants that; `operator` already has `*`.
-5. Add a test that invokes through the Fabric.
+5. Only if it should **ship upstream**: `scaffold --ship`, add a builtin resolver, and a Fabric-level test. That is a contribution, not local evolution.
 
 ## Hard rules
 

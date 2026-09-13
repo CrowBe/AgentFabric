@@ -6,12 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from agentfabric.core import EXAMPLE_RESOLVED_CAPABILITIES
-from agentfabric.fabric import Fabric, load_or_init
+from agentfabric.fabric import load_or_init
 from agentfabric.notice import harvest_audit, open_opportunities
+from agentfabric.sync import origin_path, record_origin
 
 
 def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
     fabric = load_or_init(home, sop_root=sop_root)
+    if not origin_path(fabric.home).is_file():
+        record_origin(fabric.home, sop_root=fabric.sop_root)
     harvest_audit(fabric.home, fabric.audit.recent(200))
     views = [fabric.resolution_of(cap_id) for cap_id in EXAMPLE_RESOLVED_CAPABILITIES]
     missing = [view.id for view in views if view.status != "resolved"]
@@ -42,6 +45,7 @@ def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
         "next": [
             "Prefer agentsop_invoke / `agentfabric invoke` for named work.",
             "When fallback or shell solves a recurring deterministic job, run /extend-library.",
+            "Local evolution belongs in .fabric/; after pulling upstream, run `agentfabric sync`.",
             "Read agentsop/CONVENTIONS.md before adding a capability.",
         ],
     }
