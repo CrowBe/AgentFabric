@@ -78,6 +78,7 @@ class CapabilityView:
     status: ResolutionStatus
     resolver: str | None
     origin: str = "upstream"
+    detail: str | None = None
 
 
 class InvokeContext:
@@ -178,6 +179,7 @@ class Fabric:
         # idempotent capability needs it. The CLI must not advertise this key.
         self._idempotency: dict[str, Result] = {}
         self._resolution = read_json(self.home / "resolution.json", {})
+        self._binding_errors: dict[str, str] = {}
         self._bindings = self._load_bindings()
 
     def add_principal(self, principal_id: str, privileges: list[str] | None = None) -> Principal:
@@ -284,6 +286,7 @@ class Fabric:
 
     def _load_bindings(self) -> dict[str, ResolverBinding]:
         bindings: dict[str, ResolverBinding] = {}
+        errors: dict[str, str] = {}
         for cap_id, (label, fn) in BUILTIN_RESOLVERS.items():
             bindings[cap_id] = ResolverBinding(
                 capability=cap_id,
@@ -293,11 +296,21 @@ class Fabric:
                 source=label,
             )
         for cap_id, meta in self._resolution.items():
-            path = Path(meta["path"])
-            if not path.is_absolute():
-                path = self.home / path
-            source = path.read_text(encoding="utf-8")
-            fn = load_python_resolver(source, str(path))
+            path: Path | None = None
+            try:
+                if not isinstance(meta, dict) or not isinstance(meta.get("path"), str):
+                    raise ResolverError(f"resolution record for {cap_id} is missing a path")
+                path = Path(meta["path"])
+                if not path.is_absolute():
+                    path = self.home / path
+                source = path.read_text(encoding="utf-8")
+                fn = load_python_resolver(source, str(path))
+            except (OSError, UnicodeDecodeError, ResolverError, TypeError) as exc:
+                # A recorded local resolver is disposable. Failure here must
+                # not take the rest of the Fabric down with it.
+                bindings.pop(cap_id, None)
+                errors[cap_id] = self._describe_resolver_load_error(cap_id, path, exc)
+                continue
             bindings[cap_id] = ResolverBinding(
                 capability=cap_id,
                 kind=meta.get("kind", "local_python"),
@@ -305,7 +318,41 @@ class Fabric:
                 fn=fn,
                 source=str(path),
             )
+        self._binding_errors = errors
         return bindings
+
+    def _recorded_resolver_label(self, capability_id: str) -> str | None:
+        meta = self._resolution.get(capability_id)
+        if not isinstance(meta, dict):
+            return None
+        recorded = meta.get("path")
+        if not isinstance(recorded, str) or not recorded:
+            return None
+        return f"local:{Path(recorded).name}"
+
+    def _describe_resolver_load_error(
+        self,
+        capability_id: str,
+        path: Path | None,
+        exc: BaseException,
+    ) -> str:
+        loc: str | None = None
+        if path is not None:
+            try:
+                loc = path.relative_to(self.home).as_posix()
+            except ValueError:
+                loc = str(path)
+        if isinstance(exc, FileNotFoundError):
+            return f"crystallised resolver is missing: {loc or capability_id}"
+        if isinstance(exc, PermissionError):
+            return f"crystallised resolver is unreadable: {loc or capability_id}"
+        if isinstance(exc, UnicodeDecodeError):
+            return f"crystallised resolver is not valid text: {loc or capability_id}"
+        if isinstance(exc, ResolverError):
+            return exc.message
+        if loc:
+            return f"crystallised resolver failed to load ({loc}): {exc}"
+        return f"crystallised resolver failed to load: {exc}"
 
     def capability(self, capability_id: str) -> Capability:
         cap = self.capabilities.get(capability_id)
@@ -317,9 +364,15 @@ class Fabric:
         cap = self.capability(capability_id)
         seen = _seen or set()
         binding = self._bindings.get(capability_id)
+        detail: str | None = None
         if binding is None:
-            status: ResolutionStatus = "unresolved"
-            resolver = None
+            detail = self._binding_errors.get(capability_id)
+            if detail:
+                status: ResolutionStatus = "unavailable"
+                resolver = self._recorded_resolver_label(capability_id)
+            else:
+                status = "unresolved"
+                resolver = None
         else:
             status = "resolved"
             resolver = binding.label
@@ -341,6 +394,7 @@ class Fabric:
             status=status,
             resolver=resolver,
             origin=self.capability_origins.get(capability_id, "upstream"),
+            detail=detail,
         )
 
     def invoke(
@@ -388,10 +442,15 @@ class Fabric:
         if not nested and not result.ok and result.error and result.error.code == "UNRESOLVED":
             from agentfabric.notice import record as record_opportunity
 
+            view = self.resolution_of(capability_id) if capability_id in self.capabilities else None
+            if view is not None and view.status == "unavailable":
+                summary = f"{capability_id} resolver is missing or broken"
+            else:
+                summary = f"{capability_id} is in the catalogue but has no resolver"
             record_opportunity(
                 self.home,
                 kind="unresolved",
-                summary=f"{capability_id} is in the catalogue but has no resolver",
+                summary=summary,
                 capability=capability_id,
             )
         return result
@@ -434,6 +493,10 @@ class Fabric:
         if view.status == "unresolved":
             raise Unresolved(
                 f"capability {capability_id} has no resolver; crystallise one to make it available"
+            )
+        if view.status == "unavailable":
+            raise Unresolved(
+                f"capability {capability_id} resolver is unavailable: {view.detail}"
             )
         if view.status == "blocked":
             missing = [
@@ -500,6 +563,7 @@ class Fabric:
             fn=fn,
             source=str(path),
         )
+        self._binding_errors.pop(capability_id, None)
         return {
             "capability": cap.id,
             "resolver": f"local:{path.name}",

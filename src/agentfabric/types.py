@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 Effect = Literal["discover", "read", "create", "write", "append"]
 Privilege = Literal["inspect", "crystallise", "fallback"]
-ResolutionStatus = Literal["resolved", "unresolved", "blocked"]
+ResolutionStatus = Literal["resolved", "unresolved", "blocked", "unavailable"]
 
 REF_PATTERN = r"^rf_[a-z0-9]+$"
 CAPABILITY_ID_PATTERN = r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$"
