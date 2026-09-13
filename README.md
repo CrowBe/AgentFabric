@@ -62,7 +62,7 @@ python3 -m agentfabric set-up
 python3 -m agentfabric inspect
 ```
 
-Local evolution stays inside `.fabric/` (gitignored): overlay capability documents, crystallised resolvers, grants, workspace. After pulling upstream changes into the git tree, run `agentfabric sync` — it reconciles catalogues and surfaces semantic conflicts; it does not merge Git.
+Local evolution stays inside `.fabric/` (gitignored): overlay capability documents, crystallised resolvers, grants, workspace. Git-tracked repository content is upstream-owned. After pulling upstream changes into the git tree, run `agentfabric sync` — it reconciles catalogues and surfaces semantic conflicts; it does not merge Git.
 
 `agentfabric demo` still walks the original MVP script: semantic work, authority, ResourceRef boundaries, crystallisation, reuse, and the fallback escape hatch.
 

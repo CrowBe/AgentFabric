@@ -169,6 +169,14 @@ def test_sync_preserves_local_when_upstream_adds_same_id(tmp_path: Path) -> None
     assert reloaded.resolution_of("text.hash").origin == "local"
     assert reloaded.resolution_of("text.hash").title == "Hash text"
 
+    again = sync_fabric(fabric.home, sop_root=sop)
+    assert again["ok"] is False
+    again_collision = next(item for item in again["conflicts"] if item["kind"] == "id_collision")
+    assert again_collision["capability"] == "text.hash"
+    assert again_collision["live"] == "local"
+    held = Fabric(fabric.home, sop_root=sop)
+    assert held.resolution_of("text.hash").origin == "local"
+
 
 def test_sync_flags_stale_local_resolver(tmp_path: Path) -> None:
     sop = _copy_sop(tmp_path, ["workspace.discover", "text.normalize"])
@@ -191,6 +199,11 @@ def test_sync_flags_stale_local_resolver(tmp_path: Path) -> None:
     assert snapshot["capabilities"]
     assert snapshot["ownership"]["conflicts"]
 
+    again = sync_fabric(fabric.home, sop_root=sop)
+    assert again["ok"] is False
+    assert again["changes"]["changed"] == []
+    assert any(item["kind"] == "stale_local_resolver" for item in again["conflicts"])
+
 
 def test_sync_flags_removed_capability_still_in_use(tmp_path: Path) -> None:
     sop = _copy_sop(tmp_path, ["workspace.discover", "text.normalize"])
@@ -207,6 +220,11 @@ def test_sync_flags_removed_capability_still_in_use(tmp_path: Path) -> None:
     assert any(item["kind"] == "capability_removed" for item in report["conflicts"])
     Fabric(fabric.home, sop_root=sop).snapshot()
 
+    again = sync_fabric(fabric.home, sop_root=sop)
+    assert again["ok"] is False
+    assert again["changes"]["removed"] == []
+    assert any(item["kind"] == "capability_removed" for item in again["conflicts"])
+
 
 def test_sync_check_does_not_write_origin(fabric: Fabric) -> None:
     before = read_origin(fabric.home)
@@ -215,12 +233,58 @@ def test_sync_check_does_not_write_origin(fabric: Fabric) -> None:
     assert read_origin(fabric.home)["recorded_at"] == before["recorded_at"]
 
 
-def test_ownership_leak_parser_ignores_fabric_and_tests() -> None:
+def test_stale_resolver_without_stored_digest_survives_second_sync(tmp_path: Path) -> None:
+    sop = _copy_sop(tmp_path, ["workspace.discover", "text.normalize"])
+    fabric = Fabric.init(tmp_path / "fabric", sop_root=sop)
+    fabric.crystallise(
+        "operator",
+        "text.normalize",
+        "def resolve(ctx, input):\n    return {\"text\": input[\"text\"].strip()}\n",
+    )
+    resolution = json.loads((fabric.home / "resolution.json").read_text(encoding="utf-8"))
+    resolution["text.normalize"].pop("contract_digest", None)
+    (fabric.home / "resolution.json").write_text(
+        json.dumps(resolution, indent=2) + "\n", encoding="utf-8"
+    )
+    path = sop / "capabilities" / "text.normalize.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["description"] = "Changed contract description."
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+    first = sync_fabric(fabric.home, sop_root=sop)
+    second = sync_fabric(fabric.home, sop_root=sop)
+    assert first["ok"] is False
+    assert second["ok"] is False
+    assert any(item["kind"] == "stale_local_resolver" for item in first["conflicts"])
+    assert any(item["kind"] == "stale_local_resolver" for item in second["conflicts"])
+
+
+def test_recrystallise_clears_stale_local_resolver(tmp_path: Path) -> None:
+    sop = _copy_sop(tmp_path, ["workspace.discover", "text.normalize"])
+    fabric = Fabric.init(tmp_path / "fabric", sop_root=sop)
+    source = "def resolve(ctx, input):\n    return {\"text\": input[\"text\"].strip()}\n"
+    fabric.crystallise("operator", "text.normalize", source)
+    path = sop / "capabilities" / "text.normalize.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["description"] = "Changed contract description."
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    assert sync_fabric(fabric.home, sop_root=sop)["ok"] is False
+
+    refreshed = Fabric(fabric.home, sop_root=sop)
+    refreshed.crystallise("operator", "text.normalize", source)
+    report = sync_fabric(refreshed.home, sop_root=sop)
+    assert report["ok"] is True
+    assert all(item["kind"] != "stale_local_resolver" for item in report["conflicts"])
+
+
+def test_ownership_leak_parser_treats_tracked_repo_as_upstream() -> None:
     porcelain = "\n".join(
         [
             " M agentsop/capabilities/blob.read.json",
             "?? src/agentfabric/sync.py",
             " M tests/test_sync.py",
+            " M AGENTS.md",
+            "?? .agents/skills/agentfabric/sync-upstream/SKILL.md",
             "?? .fabric/capabilities/text.hash.json",
         ]
     )
@@ -229,6 +293,9 @@ def test_ownership_leak_parser_ignores_fabric_and_tests() -> None:
     assert paths == {
         "agentsop/capabilities/blob.read.json",
         "src/agentfabric/sync.py",
+        "tests/test_sync.py",
+        "AGENTS.md",
+        ".agents/skills/agentfabric/sync-upstream/SKILL.md",
     }
 
 

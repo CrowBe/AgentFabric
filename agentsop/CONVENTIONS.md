@@ -71,7 +71,7 @@ agentfabric scaffold text.hash --ship --title "Hash text" --description "SHA-256
 # agentfabric.fabric.BUILTIN_RESOLVERS
 ```
 
-Do not edit `agentsop/` or `src/agentfabric/` to store machine-specific behaviour. Recurring Git merge friction is a signal that local evolution crossed the ownership boundary.
+Do not edit git-tracked repository files to store machine-specific behaviour. That includes contracts and runtime (`agentsop/`, `src/agentfabric/`) as well as skills, docs, tests, and packaging. Recurring Git merge friction is a signal that local evolution crossed the ownership boundary.
 
 A resolver is trusted local Python:
 
@@ -115,12 +115,12 @@ An installed Fabric is expected to evolve locally while the AgentFabric reposito
 
 | Owner | Lives in | Typical contents |
 | --- | --- | --- |
-| **Upstream** | git (`agentsop/`, `src/agentfabric/`) | Shipped contracts, runtime, builtin resolvers |
+| **Upstream** | git-tracked repository content | Everything the project ships: contracts, runtime, skills, docs, tests, packaging, config. `agentsop/` and `src/agentfabric/` are the semantic core, not the whole surface. |
 | **Local Fabric** | `.fabric/` (gitignored) | Overlay contracts, crystallised resolvers, grants, workspace, origin pin |
 
-Routine local extension must not require a dirty upstream working tree. `agentfabric scaffold` writes the overlay. `crystallise` writes `.fabric/resolvers/`.
+Routine local extension must not require a dirty working tree. `agentfabric scaffold` writes the overlay. `crystallise` writes `.fabric/resolvers/`. Do not store machine-specific behaviour in git-tracked files.
 
-After the source tree has been updated (`git pull` / merge of *upstream-owned* paths only):
+After the git-tracked project has been updated (`git pull` / merge — not `.fabric/`):
 
 ```bash
 agentfabric sync
@@ -130,8 +130,8 @@ Sync does **not** merge Git. It:
 
 1. Diffs the current upstream catalogue against the Fabric's origin pin.
 2. Keeps local overlay behaviour unless you intentionally supersede it.
-3. Surfaces genuine conflicts (`id_collision`, `stale_local_resolver`, `capability_removed`) instead of producing a clean Git state.
-4. Records ownership leaks (dirty `agentsop/` / `src/agentfabric/`) as feedback that the boundary was crossed.
+3. Surfaces genuine conflicts (`id_collision`, `stale_local_resolver`, `capability_removed`) instead of producing a clean Git state. Unresolved conflicts stay visible on later syncs until the local/upstream state actually changes.
+4. Records ownership leaks (dirty git-tracked paths outside `.fabric/`) as feedback that the boundary was crossed.
 5. Leaves the Fabric inspectable either way.
 
 On an id collision where this Fabric named the capability first, the overlay stays live until you rename it (keep local) or remove it (adopt upstream). On an overlay of an already-owned upstream id, the shipped contract stays live.

@@ -8,6 +8,7 @@ from typing import Any
 
 from agentfabric.audit import AuditLog, preview, utc_now
 from agentfabric.catalogue import (
+    digest_capability,
     find_agentsop_root,
     load_capability_dir,
     merge_catalogue,
@@ -131,7 +132,8 @@ class Fabric:
         self.sop_root = sop_root or find_agentsop_root(self.home)
         origin = read_origin(self.home)
         upstream_meta = origin.get("upstream") if isinstance(origin.get("upstream"), dict) else {}
-        pinned = upstream_meta.get("capabilities") if isinstance(upstream_meta, dict) else {}
+        accepted_meta = origin.get("accepted") if isinstance(origin.get("accepted"), dict) else {}
+        pinned = accepted_meta or upstream_meta.get("capabilities")
         owned = set(pinned) if isinstance(pinned, dict) and pinned else None
         last_sync = origin.get("last_sync") if isinstance(origin.get("last_sync"), dict) else {}
         holds = {
@@ -470,6 +472,7 @@ class Fabric:
             "path": rel,
             "crystallised_by": principal,
             "crystallised_at": utc_now(),
+            "contract_digest": digest_capability(cap),
         }
         write_json(self.home / "resolution.json", self._resolution)
         self._bindings[capability_id] = ResolverBinding(

@@ -11,7 +11,7 @@ from agentfabric.schema import validate_capability_document
 from agentfabric.types import Capability
 
 CapabilityOrigin = Literal["upstream", "local"]
-UPSTREAM_OWNED_PREFIXES = ("agentsop/", "src/agentfabric/")
+LOCAL_PATH_PREFIXES = (".fabric/",)
 
 
 def find_agentsop_root(start: Path | None = None) -> Path:
@@ -66,6 +66,16 @@ def digest_capability_dir(directory: Path) -> dict[str, str]:
             continue
         digests[cap_id] = document_digest(doc)
     return digests
+
+
+def digest_capability(cap: Capability) -> str:
+    if cap.source:
+        path = Path(cap.source)
+        if path.is_file():
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(doc, dict):
+                return document_digest(doc)
+    return document_digest(cap.to_public_dict())
 
 
 @dataclass
