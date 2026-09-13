@@ -8,7 +8,7 @@ domain, not part of the 0.1 contract vocabulary.
 EXAMPLE_RESOLVED_CAPABILITIES: tuple[str, ...] = (
     "workspace.discover",
     "blob.read",
-    "blob.write",
+    "blob.create",
     "blob.replace",
     "text.normalize",
     "journal.append",

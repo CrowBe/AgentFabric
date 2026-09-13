@@ -3,7 +3,7 @@ from __future__ import annotations
 from agentfabric.fabric import Fabric
 
 
-def test_semantic_loop_discover_read_transform_write(fabric: Fabric) -> None:
+def test_semantic_loop_discover_read_transform_create_replace(fabric: Fabric) -> None:
     discovered = fabric.invoke("operator", "workspace.discover", {})
     assert discovered.ok
     blob = next(
@@ -17,7 +17,7 @@ def test_semantic_loop_discover_read_transform_write(fabric: Fabric) -> None:
     assert normalized.output["text"] == "A B"
     written = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {"label": "out.md", "text": normalized.output["text"]},
     )
     assert written.ok

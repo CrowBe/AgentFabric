@@ -40,10 +40,10 @@ def test_cannot_smuggle_a_locator_in_a_ref(fabric: Fabric) -> None:
     assert result.error.code == "INVALID_INPUT"
 
 
-def test_write_label_cannot_escape_workspace(fabric: Fabric) -> None:
+def test_create_label_cannot_escape_workspace(fabric: Fabric) -> None:
     result = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {"label": "../../etc/passwd", "text": "should not land on etc"},
     )
     assert result.ok
@@ -76,7 +76,7 @@ def test_create_with_colliding_label_does_not_replace(fabric: Fabric) -> None:
 
     created = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {
             "label": "notes.md",
             "text": "should not clobber notes",
@@ -104,7 +104,7 @@ def test_create_does_not_mutate_journal_via_label(fabric: Fabric) -> None:
 
     created = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {"label": "journal.md", "text": "clobber", "kind": "blob"},
     )
     assert created.ok

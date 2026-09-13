@@ -1,6 +1,6 @@
 {
   "agentsop": "0.1",
-  "id": "blob.write",
+  "id": "blob.create",
   "title": "Create blob",
   "description": "Create a new text resource in the workspace. The fabric chooses the locator from a human label. Labels are hints, not paths, and never replace an existing resource. Returns a new ResourceRef.",
   "input": {

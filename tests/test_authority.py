@@ -38,8 +38,8 @@ def test_unknown_principal_is_denied(fabric: Fabric) -> None:
     assert result.error.code == "DENIED"
 
 
-def test_guest_cannot_write(fabric: Fabric) -> None:
-    result = fabric.invoke("guest", "blob.write", {"label": "x.md", "text": "no"})
+def test_guest_cannot_create(fabric: Fabric) -> None:
+    result = fabric.invoke("guest", "blob.create", {"label": "x.md", "text": "no"})
     assert not result.ok
     assert result.error.code == "DENIED"
 
@@ -64,13 +64,13 @@ def test_create_authority_cannot_mutate_existing_resource(fabric: Fabric) -> Non
     fabric.add_principal("creator")
     fabric.authority.add(
         principal="creator",
-        capability="blob.write",
+        capability="blob.create",
         resource="*",
         effects=["create"],
     )
     created = fabric.invoke(
         "creator",
-        "blob.write",
+        "blob.create",
         {"label": "notes.md", "text": "creator should not clobber"},
     )
     assert created.ok
@@ -99,7 +99,7 @@ def test_replace_is_resource_scoped(fabric: Fabric) -> None:
     notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
     other = fabric.invoke(
         "operator",
-        "blob.write",
+        "blob.create",
         {"label": "other.md", "text": "other"},
     ).output["resource"]
 

@@ -15,7 +15,7 @@ def test_capability_catalogue_is_valid() -> None:
     expected = {
         "workspace.discover",
         "blob.read",
-        "blob.write",
+        "blob.create",
         "blob.replace",
         "text.normalize",
         "journal.append",
@@ -26,8 +26,8 @@ def test_capability_catalogue_is_valid() -> None:
     digest = caps["journal.digest"]
     assert digest.depends_on == ["blob.read", "text.normalize"]
     assert caps["text.word_count"].effects == []
-    assert caps["blob.write"].effects == ["create"]
-    assert caps["blob.write"].authority["resources"] == []
+    assert caps["blob.create"].effects == ["create"]
+    assert caps["blob.create"].authority["resources"] == []
     assert caps["blob.replace"].effects == ["write"]
     assert caps["blob.replace"].authority["resources"] == ["input.resource"]
 

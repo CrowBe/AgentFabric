@@ -2,7 +2,7 @@
 
 Clone, open this repo in an agent harness, then run **`/set-up`**.
 
-That is the first step. It installs the package if needed, initialises `.fabric/`, and verifies the **example resolved catalogue** (`workspace.discover`, `blob.read`, `blob.write`, `blob.replace`, `text.normalize`, plus example-domain `journal.append` / `journal.digest`). Those journal operations are demos, not AgentSOP primitives. Do not start from Bash.
+That is the first step. It installs the package if needed, initialises `.fabric/`, and verifies the **example resolved catalogue** (`workspace.discover`, `blob.read`, `blob.create`, `blob.replace`, `text.normalize`, plus example-domain `journal.append` / `journal.digest`). Those journal operations are demos, not AgentSOP primitives. Do not start from Bash.
 
 ## How to work here
 
