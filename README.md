@@ -41,8 +41,8 @@ Contracts are durable. Resolvers are disposable. Resolvers in this MVP are trust
 | **AgentSOP Experimental 0.1** | [`agentsop/`](agentsop/) | Semantic contract: capabilities, typed I/O, ResourceRefs, effects, grants, success/failure, resolution, small composition. |
 | **AgentFabric runtime** | [`src/agentfabric/`](src/agentfabric/) | Principals, ResourceRefs, grants, resolvers, invocation, audit. Thin on purpose. |
 | **Binding** | CLI + [`src/agentfabric/bindings/mcp.py`](src/agentfabric/bindings/mcp.py) | How an existing agent harness talks to the Fabric. Not part of AgentSOP. |
-| **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. |
-| **Hooks** | [`.cursor/hooks.json`](.cursor/hooks.json) | Observe fallback/shell and remind the agent to crystallise. Do not block the escape hatch. |
+| **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. Not part of AgentSOP. |
+| **Hooks** | [`.cursor/hooks.json`](.cursor/hooks.json) | Cursor harness adapter: observe fallback/shell and remind the agent to crystallise. Not part of AgentSOP; do not block the escape hatch. |
 | **Conventions** | [`agentsop/CONVENTIONS.md`](agentsop/CONVENTIONS.md) | How to add a capability without leaking locators or widening authority. |
 
 AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapter. A second harness should bind to the same capability documents.
@@ -53,7 +53,7 @@ AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapt
 
 The intended path is: clone, `cd` into the repo with an agent harness, run **`/set-up`**.
 
-That skill installs the package if needed, runs `agentfabric set-up`, and checks that the **core semantic resolvers** are live. It does not grow the catalogue.
+That skill installs the package if needed, runs `agentfabric set-up`, and checks that the **example resolved catalogue** is live. It does not grow the catalogue, and it does not treat `journal.*` as AgentSOP primitives.
 
 ```bash
 # equivalent without a harness
@@ -107,19 +107,19 @@ The configured principal is a binding concern. Agents do not choose their own id
 
 ## Capability set
 
-Enough to exercise different parts of the model, small enough to hold in your head.
+Enough to exercise different parts of the model, small enough to hold in your head. This is a **demo catalogue**, not the AgentSOP primitive set. `journal.*` is an example domain.
 
 | Capability | Why it is here | Ships resolved? |
 | --- | --- | --- |
-| `workspace.discover` | Resource discovery; issues ResourceRefs | yes |
+| `workspace.discover` | Resource discovery; introduces ResourceRefs | yes |
 | `blob.read` | Resource consumption | yes |
 | `blob.write` | Resource creation; fabric chooses the locator | yes |
 | `text.normalize` | Pure transformation, no resource | yes |
-| `journal.append` | Effectful operation | yes |
-| `journal.digest` | Composition via `depends_on` → `blob.read` + `text.normalize` | yes |
+| `journal.append` | Example effectful operation | yes |
+| `journal.digest` | Example composition via `depends_on` → `blob.read` + `text.normalize` | yes |
 | `text.word_count` | Crystallisation target | **no** |
 
-Composition reuses resolvers. It does not mint ResourceRefs and it does not widen authority: inner invocations are authorized as the same Principal.
+Composition reuses resolvers. Nested invokes are limited to the parent capability's `depends_on`. It does not mint ResourceRefs and it does not widen authority: inner invocations are authorized as the same Principal.
 
 ---
 

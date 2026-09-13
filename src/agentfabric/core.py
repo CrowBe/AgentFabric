@@ -1,9 +1,11 @@
-"""Core capability ids that a set-up Fabric must resolve.
+"""Example catalogue this Fabric's set-up must resolve.
 
-These are the first-run semantic library — not a complete catalogue.
+These ids are not AgentSOP primitives. They exercise discovery, consume,
+create, transform, an effect, and composition. `journal.*` is an example
+domain, not part of the 0.1 contract vocabulary.
 """
 
-CORE_CAPABILITIES: tuple[str, ...] = (
+EXAMPLE_RESOLVED_CAPABILITIES: tuple[str, ...] = (
     "workspace.discover",
     "blob.read",
     "blob.write",
@@ -11,3 +13,4 @@ CORE_CAPABILITIES: tuple[str, ...] = (
     "journal.append",
     "journal.digest",
 )
+

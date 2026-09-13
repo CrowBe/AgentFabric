@@ -46,5 +46,9 @@ class DependencyFailed(FabricError):
     code = "DEPENDENCY_FAILED"
 
 
+class UndeclaredDependency(FabricError):
+    code = "UNDECLARED_DEPENDENCY"
+
+
 class ResolverError(FabricError):
     code = "RESOLVER_ERROR"

@@ -37,7 +37,7 @@ resolver              →  disposable
 | **Resolver** | Trusted implementation that satisfies a Capability. |
 | **Invocation** | A Principal requesting a Capability with an input. |
 | **Result** | Typed success, or a failure with a stable code. |
-| **Dependency** | A Capability another Capability's resolver may invoke. Used for small composition, not planning. |
+| **Dependency** | A Capability another Capability's resolver may invoke. The runtime must reject nested invocations not listed here. Used for small composition, not planning. |
 
 Knowing a locator is not possessing a ResourceRef. Possessing a ResourceRef is not having authority to act on it. Discovery, reference, and authority are distinct.
 
@@ -82,13 +82,13 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 
 ### Fields
 
-- **`id`** — stable name, dotted, lowercase. Example: `journal.append`.
+- **`id`** — stable name, dotted, lowercase. Example: `blob.read`.
 - **`input` / `output`** — JSON Schema objects. 0.1 uses a small subset: `object`, `string`, `integer`, `array`, `boolean`, `required`, `additionalProperties`, `enum`, and `$ref` to `ResourceRef`.
-- **`effects`** — declared consequences. Empty for pure transformations.
+- **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
 - **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
 - **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
 - **`authority.effects`** — effects that must be granted. Usually the same as `effects`.
-- **`depends_on`** — capability ids a resolver may invoke. Composition reuses resolvers; it does not widen authority or mint references.
+- **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references.
 
 Resolution status is **not** part of the document. Contracts are durable; whether a resolver currently exists is a runtime fact.
 
@@ -106,13 +106,17 @@ Resolution status is **not** part of the document. Contracts are durable; whethe
 
 Discovery may return a human `label` *alongside* a ResourceRef. The label is not an implementation locator and cannot be substituted for a ref.
 
+**Introducing a ref is distinct from transforming data.** A discovery (or other ref-introducing) operation is how a pre-existing resource enters the caller's reachable world. Knowing an implementation locator does not yield a ResourceRef, and a transformation must not mint refs from locators. Reference discovery remains an explicit part of the semantic model.
+
 A fabric may store an implementation locator internally. Agents are not given it.
 
 ---
 
 ## Effects
 
-0.1 defines five effects. New ones can be added later.
+0.1 defines five effects. The vocabulary is **closed** for this version.
+
+Adding an effect is an AgentSOP / schema revision (`capability.schema.json`). An implementation must not invent effect names ad hoc. New ones can be added later by evolving the contract.
 
 | Effect | Typical meaning |
 | --- | --- |
@@ -149,7 +153,8 @@ Every invocation yields one Result:
 | `INVALID_INPUT` | Input failed the capability schema. |
 | `INVALID_REF` | Value was not a well-formed ResourceRef. |
 | `KIND_MISMATCH` | Resource kind did not match what the capability requires. |
-| `DEPENDENCY_FAILED` | A composed invocation failed. |
+| `DEPENDENCY_FAILED` | A composed invocation failed (unresolved, denied, or inner error). |
+| `UNDECLARED_DEPENDENCY` | A resolver invoked a capability not listed in its `depends_on`. |
 | `RESOLVER_ERROR` | Trusted resolver raised or returned an invalid output. |
 
 These codes are part of the contract. Messages are not.
@@ -178,17 +183,27 @@ AgentSOP does not say who is allowed to register a resolver. That is a fabric tr
 
 ## Composition
 
-A capability may `depends_on` others. A resolver may invoke those capabilities through the same fabric, so audit, typing, and grants still apply.
+A capability may `depends_on` others. A resolver may invoke **only** those capabilities through the same fabric, so audit, typing, grants, and the declared graph still apply. A runtime that honours 0.1 must reject nested invocations of ids not listed in `depends_on`.
 
-0.1 does not include a planner. If a dependency is unresolved or denied, the invocation fails. Derivation must not bypass ResourceRef discovery or authority checks.
+0.1 does not include a planner. If a dependency is unresolved, denied, or undeclared, the invocation fails. Derivation must not bypass ResourceRef discovery or authority checks.
+
+---
+
+## Example catalogue
+
+The documents in `capabilities/` are a **demo library for this Fabric**, not AgentSOP primitives.
+
+They exist to exercise the model: discovery, consume, create, a pure transform, an effect, composition, and one unresolved name. `journal` is an example resource kind. A different Fabric may never define a journal.
 
 ---
 
 ## What 0.1 is not
 
 - Not a complete catalogue of agent operations.
-- Not a wire protocol. Bindings (MCP, CLI, …) sit beside AgentSOP, not inside it.
+- Not a wire protocol. Bindings (MCP, CLI, Cursor skills/hooks, …) sit beside AgentSOP, not inside it.
 - Not a security proof. Grants express authority; they do not harden resolvers.
 - Not a marketplace, conformance suite, or sandbox.
 
-Extend the contract when a new *kind* of thing appears (a new effect, a new typed handle). Do not extend it merely because a new file format or CLI flag appeared — that belongs in a resolver.
+Extend the contract when a new *kind* of semantic thing appears (a new effect, a new typed handle). A new *implementation detail* — file format, CLI flag, backend — belongs in a resolver.
+
+A genuinely new semantic operation may still warrant a new capability even when some CLI flag happens to implement it. Do not broaden an existing contract merely to avoid naming the new operation.

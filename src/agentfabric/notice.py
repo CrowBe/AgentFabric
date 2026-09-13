@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agentfabric.audit import utc_now
-from agentfabric.core import CORE_CAPABILITIES
+from agentfabric.core import EXAMPLE_RESOLVED_CAPABILITIES
 from agentfabric.store import append_jsonl
 
 IGNORE_SHELL = re.compile(
@@ -148,6 +148,6 @@ def reminder_text(opportunities: list[dict[str, Any]], *, unresolved: list[str])
     for item in opportunities[:5]:
         extra = item.get("capability") or item.get("command") or ""
         lines.append(f"- {item['kind']}: {item['summary']}" + (f" ({extra})" if extra else ""))
-    core = ", ".join(CORE_CAPABILITIES)
-    lines.append(f"Core resolvers (already named): {core}")
+    named = ", ".join(EXAMPLE_RESOLVED_CAPABILITIES)
+    lines.append(f"Example resolved capabilities already named: {named}")
     return "\n".join(lines)

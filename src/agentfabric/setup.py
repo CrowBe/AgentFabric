@@ -1,11 +1,11 @@
-"""Idempotent first-run setup: make the core semantic library real."""
+"""Idempotent first-run setup: make the example resolved catalogue real."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from agentfabric.core import CORE_CAPABILITIES
+from agentfabric.core import EXAMPLE_RESOLVED_CAPABILITIES
 from agentfabric.fabric import Fabric, load_or_init
 from agentfabric.notice import harvest_audit, open_opportunities
 
@@ -13,7 +13,7 @@ from agentfabric.notice import harvest_audit, open_opportunities
 def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
     fabric = load_or_init(home, sop_root=sop_root)
     harvest_audit(fabric.home, fabric.audit.recent(200))
-    views = [fabric.resolution_of(cap_id) for cap_id in CORE_CAPABILITIES]
+    views = [fabric.resolution_of(cap_id) for cap_id in EXAMPLE_RESOLVED_CAPABILITIES]
     missing = [view.id for view in views if view.status != "resolved"]
     unresolved = [
         cap_id
@@ -29,7 +29,7 @@ def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
     return {
         "home": str(fabric.home),
         "ok": not missing,
-        "core": [
+        "example_resolved": [
             {
                 "id": view.id,
                 "status": view.status,
@@ -51,9 +51,9 @@ def render_setup(report: dict[str, Any]) -> str:
     lines = [
         f"AgentFabric set-up  home={report['home']}",
         "",
-        "Core semantic resolvers",
+        "Example resolved capabilities (demo catalogue, not AgentSOP primitives)",
     ]
-    for item in report["core"]:
+    for item in report["example_resolved"]:
         lines.append(f"  {item['id']:<22} {item['status']:<11} {item['resolver'] or '—'}")
     lines.append("")
     lines.append("Unresolved (named, not yet crystallised)")

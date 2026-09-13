@@ -2,7 +2,7 @@
   "agentsop": "0.1",
   "id": "workspace.discover",
   "title": "Discover workspace resources",
-  "description": "List fabric-managed resources in the workspace. Issues ResourceRefs for files the fabric is willing to expose. Does not accept locators and does not search outside the workspace.",
+  "description": "List fabric-managed resources in the workspace. This is a ref-introducing operation: it issues ResourceRefs for files the fabric is willing to expose, which is how those resources enter the caller's reachable world. Knowing an implementation locator does not produce a ref. Does not accept locators and does not search outside the workspace.",
   "input": {
     "type": "object",
     "properties": {

@@ -2,7 +2,7 @@
 name: set-up
 description: >
   First command after cloning AgentFabric. Installs the package, initialises
-  a local Fabric, and verifies the core semantic resolvers are live. Invoke
+  a local Fabric, and verifies the example resolved catalogue is live. Invoke
   explicitly with /set-up after clone or when the fabric is missing.
 disable-model-invocation: true
 ---
@@ -13,14 +13,14 @@ This is the clone-path command. Do not start improvising with the shell until it
 
 ## Goal
 
-A working Fabric whose **core semantic resolvers** are bound:
+A working Fabric whose **example resolved catalogue** is bound. These are demo capabilities, not AgentSOP primitives. `journal.*` is an example domain.
 
 - `workspace.discover`
 - `blob.read`
 - `blob.write`
 - `text.normalize`
-- `journal.append`
-- `journal.digest`
+- `journal.append` (example domain)
+- `journal.digest` (example composition)
 
 `text.word_count` is *supposed* to remain unresolved until someone crystallises it.
 
@@ -42,7 +42,7 @@ Run from the repository root.
 
    Idempotent. Creates `.fabric/` if needed, binds core resolvers, prints unresolved names and any noticed opportunities.
 
-3. Confirm the output lists every core capability as `resolved`. If any core item is not resolved, stop and fix that before doing product work.
+3. Confirm the output lists every example resolved capability as `resolved`. If any of those items is not resolved, stop and fix that before doing product work.
 
 4. Do **not** invent extra capabilities during set-up. The library grows later, when work recurs, via `/extend-library` and `agentsop/CONVENTIONS.md`.
 
@@ -57,4 +57,4 @@ Run from the repository root.
 
 - Prefer named capabilities over Bash.
 - Skills under `.agents/skills/agentfabric/` teach journal review, noticing gaps, and extending the library.
-- Cursor hooks in `.cursor/hooks.json` observe fallback/shell and inject a reminder; they must not block general-purpose execution.
+- Cursor hooks in `.cursor/hooks.json` are a harness adapter (not AgentSOP). They observe fallback/shell and inject a reminder; they must not block general-purpose execution.

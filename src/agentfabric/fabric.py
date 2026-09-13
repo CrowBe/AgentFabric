@@ -13,6 +13,7 @@ from agentfabric.errors import (
     FabricError,
     InvalidInput,
     ResolverError,
+    UndeclaredDependency,
     UnknownCapability,
     Unresolved,
 )
@@ -70,9 +71,10 @@ class CapabilityView:
 
 
 class InvokeContext:
-    def __init__(self, fabric: Fabric, principal: str) -> None:
+    def __init__(self, fabric: Fabric, principal: str, *, capability: str) -> None:
         self._fabric = fabric
         self.principal = principal
+        self.capability = capability
 
     @property
     def workspace(self) -> Path:
@@ -83,6 +85,11 @@ class InvokeContext:
         return self._fabric.resources
 
     def invoke(self, capability_id: str, input_value: dict[str, Any]) -> dict[str, Any]:
+        allowed = self._fabric.capability(self.capability).depends_on
+        if capability_id not in allowed:
+            raise UndeclaredDependency(
+                f"{self.capability} does not declare a dependency on {capability_id}"
+            )
         result = self._fabric.invoke(
             self.principal, capability_id, input_value, nested=True
         )
@@ -389,7 +396,7 @@ class Fabric:
                 f"capability {capability_id} is blocked on unresolved dependencies: {missing}"
             )
         binding = self._bindings[capability_id]
-        ctx = InvokeContext(self, principal)
+        ctx = InvokeContext(self, principal, capability=capability_id)
         try:
             output = binding.fn(ctx, typed_input)
         except FabricError:

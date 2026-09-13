@@ -51,6 +51,7 @@
     "output": { "$ref": "#/$defs/jsonSchema" },
     "effects": {
       "type": "array",
+      "description": "Closed AgentSOP 0.1 vocabulary. Adding an effect is a schema revision, not an ad-hoc implementation extension.",
       "items": {
         "type": "string",
         "enum": ["discover", "read", "create", "write", "append"]

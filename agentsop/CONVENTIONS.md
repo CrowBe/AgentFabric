@@ -2,10 +2,10 @@
 
 This is how AgentFabric grows. Read it before adding a capability or resolver.
 
-The first-run library is small on purpose: discovery, read, write, a pure transform, an effect, and one composition. Everything else should appear because it recurred, not because we anticipated it.
+The first-run **example** library is small on purpose: discovery, read, write, a pure transform, an effect, and one composition. `journal.*` is an example domain, not an AgentSOP primitive. Everything else should appear because it recurred, not because we anticipated it.
 
 ```
-clone → /set-up → core resolvers live
+clone → /set-up → example resolvers live
                  ↓
         work proceeds semantically
                  ↓
@@ -40,7 +40,7 @@ If you need a paragraph of reasoning to decide the output, it is not a capabilit
 2. **Name the operation, not the implementation.** `text.word_count` is a capability. `run_wc_dash_w` is not.
 3. **Keep I/O small and strict.** `additionalProperties: false`. Resource handles are ResourceRefs (`$ref: "#/$defs/ResourceRef"`), never paths.
 4. **Declare effects honestly.** Pure transforms use `effects: []`. Do not hide writes.
-5. **Composition does not widen authority.** `depends_on` lets a resolver reuse other capabilities. Inner invokes are authorized as the same Principal. Do not mint refs inside a resolver to skip discovery.
+5. **Composition does not widen authority.** `depends_on` is the allow-list a resolver may `ctx.invoke`. Undeclared nested invokes fail. Inner invokes are authorized as the same Principal. Do not mint refs inside a resolver to skip discovery.
 6. **Contracts are durable; resolvers are disposable.** Change a resolver freely. Change a document only when the *meaning* changed. If you must break a document, give it a new id.
 
 ### Two ways to land a resolver
@@ -94,6 +94,6 @@ If the capability ships in-repo, add a test that:
 
 ## What hooks and skills will nag about
 
-Hooks notice `fallback.exec`, unresolved catalogue entries, and shell that looks like a deterministic transform (`python -c`, `wc`, `jq`, checksums, …). They do not block the escape hatch.
+This is harness behaviour, not AgentSOP. This repo's Cursor adapter (`.cursor/hooks.json`) notices `fallback.exec`, unresolved catalogue entries, and shell that looks like a deterministic transform (`python -c`, `wc`, `jq`, checksums, …). Other harnesses can ignore those files. Hooks do not block the escape hatch.
 
 When they fire, follow this file rather than repeating the implementation.

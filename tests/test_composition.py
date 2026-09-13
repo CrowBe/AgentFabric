@@ -31,8 +31,24 @@ def test_composition_does_not_bypass_grants(fabric: Fabric) -> None:
     assert result.error.code == "DEPENDENCY_FAILED"
 
 
+def test_undeclared_nested_invoke_is_rejected(fabric: Fabric) -> None:
+    fabric.crystallise(
+        "operator",
+        "text.word_count",
+        '''
+def resolve(ctx, input):
+    ctx.invoke("text.normalize", {"text": input["text"]})
+    return {"count": 1}
+''',
+    )
+    result = fabric.invoke("operator", "text.word_count", {"text": "one two"})
+    assert not result.ok
+    assert result.error.code == "UNDECLARED_DEPENDENCY"
+
+
 def test_guest_digest_works_because_guest_can_read(fabric: Fabric) -> None:
     discovered = fabric.invoke("guest", "workspace.discover", {}).output
     journal = next(item["resource"] for item in discovered["resources"] if item["resource"]["kind"] == "journal")
     result = fabric.invoke("guest", "journal.digest", {"resource": journal})
     assert result.ok
+

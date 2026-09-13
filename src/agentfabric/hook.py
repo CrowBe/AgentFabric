@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agentfabric.core import CORE_CAPABILITIES
+from agentfabric.core import EXAMPLE_RESOLVED_CAPABILITIES
 from agentfabric.fabric import default_home
 from agentfabric.notice import (
     maybe_shell_opportunity,
@@ -72,7 +72,7 @@ def _session_start(home: Path) -> dict[str, Any]:
             "additional_context": (
                 "This repository is AgentFabric. After clone, run the namespaced "
                 "/set-up skill (`.agents/skills/agentfabric/set-up`) before improvising "
-                "with the shell. Core semantic resolvers should be live first."
+                "with the shell. The example resolved catalogue should be live first."
             )
         }
     from agentfabric.fabric import Fabric
@@ -93,11 +93,11 @@ def _session_start(home: Path) -> dict[str, Any]:
     }
     opportunities = open_opportunities(home, resolved=resolved)
     if not unresolved and not opportunities:
-        core = ", ".join(CORE_CAPABILITIES)
+        named = ", ".join(EXAMPLE_RESOLVED_CAPABILITIES)
         return {
             "additional_context": (
                 f"AgentFabric is set up. Prefer named capabilities over shell. "
-                f"Core resolvers: {core}."
+                f"Example resolved catalogue: {named}."
             )
         }
     return {"additional_context": reminder_text(opportunities, unresolved=unresolved)}
