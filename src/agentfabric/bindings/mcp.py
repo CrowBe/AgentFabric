@@ -45,6 +45,8 @@ def tools() -> list[dict[str, Any]]:
                 "properties": {
                     "capability": {"type": "string"},
                     "input": {"type": "object"},
+                    # Honoured for this long-lived stdio process. The CLI does
+                    # not expose the same option because each command is a new process.
                     "idempotency_key": {"type": "string"},
                 },
             },

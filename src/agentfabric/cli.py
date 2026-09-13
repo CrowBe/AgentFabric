@@ -60,12 +60,7 @@ def cmd_invoke(ns: argparse.Namespace) -> int:
         payload = json.loads(raw) if raw else {}
     else:
         payload = {}
-    result = fabric.invoke(
-        ns.principal,
-        ns.capability,
-        payload,
-        idempotency_key=ns.idempotency_key,
-    )
+    result = fabric.invoke(ns.principal, ns.capability, payload)
     _print(result.to_dict(), as_json=True)
     return 0 if result.ok else 2
 
@@ -185,7 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_invoke.add_argument("capability")
     p_invoke.add_argument("input", nargs="?", help="JSON input object")
     p_invoke.add_argument("-p", "--principal", default="operator")
-    p_invoke.add_argument("--idempotency-key")
+    # Each CLI process is fresh. The runtime idempotency cache is process-local,
+    # so a flag here would advertise replay that cannot survive between commands.
+    # Long-lived bindings such as MCP may still pass idempotency_key.
     p_invoke.set_defaults(func=cmd_invoke)
 
     p_crys = sub.add_parser("crystallise", help="Bind a Python resolver to a capability")
