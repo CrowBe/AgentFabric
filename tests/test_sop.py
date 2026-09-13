@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from agentfabric.catalogue import find_agentsop_root, load_capabilities
+from agentfabric.errors import InvalidRef
 from agentfabric.schema import validate_against, validate_capability_document
 
 
@@ -45,11 +48,7 @@ def test_capability_documents_round_trip() -> None:
 def test_resource_ref_schema_rejects_locators() -> None:
     schema = {"$ref": "#/$defs/ResourceRef"}
     validate_against(schema, {"ref": "rf_abc123", "kind": "blob"})
-    try:
+    with pytest.raises(InvalidRef, match="locators or extra fields"):
         validate_against(
             schema, {"ref": "rf_abc123", "kind": "blob", "path": "/etc/passwd"}
         )
-    except Exception as exc:
-        assert "unexpected" in str(exc).lower() or "locator" in str(exc).lower() or "INVALID" in type(exc).__name__ or "extra" in str(exc).lower() or "must not" in str(exc).lower()
-    else:
-        raise AssertionError("locator field should be rejected")

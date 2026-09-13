@@ -5,15 +5,66 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agentfabric.errors import InvalidInput, InvalidRef
+from agentfabric.errors import InvalidInput
 from agentfabric.types import CAPABILITY_ID_PATTERN, KNOWN_EFFECTS, REF_PATTERN, Capability
 
 
 RESOURCE_REF_DEF = "#/$defs/ResourceRef"
+SUPPORTED_SCHEMA_TYPES = frozenset({"object", "string", "integer", "array", "boolean"})
+SCHEMA_ANNOTATION_KEYS = frozenset({"description"})
+COMMON_SCHEMA_KEYS = SCHEMA_ANNOTATION_KEYS | {"type", "enum"}
+KEYS_BY_SCHEMA_TYPE = {
+    "object": COMMON_SCHEMA_KEYS | {"properties", "required", "additionalProperties"},
+    "string": COMMON_SCHEMA_KEYS | {"pattern"},
+    "integer": COMMON_SCHEMA_KEYS,
+    "array": COMMON_SCHEMA_KEYS | {"items"},
+    "boolean": COMMON_SCHEMA_KEYS,
+}
 
 
 def _fail(message: str) -> None:
     raise InvalidInput(message)
+
+
+def assert_supported_schema(schema: Any, *, path: str = "schema") -> None:
+    """Reject schema constructs the 0.1 runtime does not actually validate."""
+    if not isinstance(schema, dict):
+        raise InvalidInput(f"{path} must be a schema object")
+    if "$ref" in schema:
+        extra = set(schema) - SCHEMA_ANNOTATION_KEYS - {"$ref"}
+        if extra:
+            raise InvalidInput(f"{path} has unsupported schema fields: {sorted(extra)}")
+        if schema["$ref"] != RESOURCE_REF_DEF:
+            raise InvalidInput(f"{path}: unsupported $ref {schema['$ref']}")
+        return
+    expected = schema.get("type")
+    if expected not in SUPPORTED_SCHEMA_TYPES:
+        raise InvalidInput(f"{path} has unsupported schema type {expected!r}")
+    extra = set(schema) - KEYS_BY_SCHEMA_TYPE[expected]
+    if extra:
+        raise InvalidInput(f"{path} has unsupported schema fields: {sorted(extra)}")
+    if expected == "object":
+        props = schema.get("properties", {})
+        if not isinstance(props, dict):
+            raise InvalidInput(f"{path}.properties must be an object")
+        for key, subschema in props.items():
+            assert_supported_schema(subschema, path=f"{path}.properties.{key}")
+        additional = schema.get("additionalProperties", True)
+        if isinstance(additional, dict):
+            assert_supported_schema(additional, path=f"{path}.additionalProperties")
+        elif not isinstance(additional, bool):
+            raise InvalidInput(f"{path}.additionalProperties must be a boolean or schema")
+        required = schema.get("required", [])
+        if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
+            raise InvalidInput(f"{path}.required must be a list of strings")
+    elif expected == "array" and "items" in schema:
+        assert_supported_schema(schema["items"], path=f"{path}.items")
+    if "enum" in schema:
+        values = schema["enum"]
+        if not isinstance(values, list) or not values:
+            raise InvalidInput(f"{path}.enum must be a non-empty list")
+    if expected == "string" and "pattern" in schema and not isinstance(schema["pattern"], str):
+        raise InvalidInput(f"{path}.pattern must be a string")
 
 
 def validate_against(schema: dict[str, Any], value: Any, *, path: str = "input") -> Any:
@@ -22,13 +73,13 @@ def validate_against(schema: dict[str, Any], value: Any, *, path: str = "input")
             _fail(f"{path}: unsupported $ref {schema['$ref']}")
         from agentfabric.types import ResourceRef
 
-        try:
-            ref = ResourceRef.from_dict(value)
-        except InvalidRef as exc:
-            raise InvalidInput(str(exc)) from exc
-        return ref.to_dict()
+        return ResourceRef.from_dict(value).to_dict()
 
     expected = schema.get("type")
+    if expected is not None and expected not in SUPPORTED_SCHEMA_TYPES:
+        _fail(f"{path}: unsupported schema type {expected!r}")
+
+    result: Any
     if expected == "object":
         if not isinstance(value, dict):
             _fail(f"{path} must be an object")
@@ -50,37 +101,36 @@ def validate_against(schema: dict[str, Any], value: Any, *, path: str = "input")
                 out[key] = item
             elif isinstance(additional, dict):
                 out[key] = validate_against(additional, item, path=f"{path}.{key}")
-        return out
-    if expected == "array":
+        result = out
+    elif expected == "array":
         if not isinstance(value, list):
             _fail(f"{path} must be an array")
         item_schema = schema.get("items", {})
-        return [
+        result = [
             validate_against(item_schema, item, path=f"{path}[{i}]")
             for i, item in enumerate(value)
         ]
-    if expected == "string":
+    elif expected == "string":
         if not isinstance(value, str):
             _fail(f"{path} must be a string")
         pattern = schema.get("pattern")
         if pattern and re.match(pattern, value) is None:
             _fail(f"{path} does not match {pattern}")
-        if "enum" in schema and value not in schema["enum"]:
-            _fail(f"{path} must be one of {schema['enum']}")
-        return value
-    if expected == "integer":
+        result = value
+    elif expected == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
             _fail(f"{path} must be an integer")
-        return value
-    if expected == "boolean":
+        result = value
+    elif expected == "boolean":
         if not isinstance(value, bool):
             _fail(f"{path} must be a boolean")
-        return value
-    if "enum" in schema:
-        if value not in schema["enum"]:
-            _fail(f"{path} must be one of {schema['enum']}")
-        return value
-    return value
+        result = value
+    else:
+        result = value
+
+    if "enum" in schema and result not in schema["enum"]:
+        _fail(f"{path} must be one of {schema['enum']}")
+    return result
 
 
 def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Capability:
@@ -127,6 +177,8 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
     }
     if extra:
         raise InvalidInput(f"capability has unexpected fields: {sorted(extra)}")
+    assert_supported_schema(doc["input"], path="input")
+    assert_supported_schema(doc["output"], path="output")
     return Capability(
         agentsop="0.1",
         id=cap_id,
