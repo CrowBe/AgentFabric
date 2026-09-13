@@ -122,6 +122,7 @@ class McpBinding:
                     "origin": view.origin,
                     "depends_on": view.depends_on,
                     "idempotent": view.idempotent,
+                    "detail": view.detail,
                 }
                 for view in (
                     self.fabric.resolution_of(cap_id)

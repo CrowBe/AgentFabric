@@ -27,6 +27,8 @@ def render_snapshot(snapshot: dict[str, Any]) -> str:
             f"  {cap['id']:<22} {status:<11} origin={origin:<8} resolver={resolver}{deps}"
         )
         lines.append(f"    {cap['title']}")
+        if cap.get("detail"):
+            lines.append(f"    {cap['detail']}")
     lines.append("")
     lines.append("Principals")
     for principal in snapshot["principals"]:

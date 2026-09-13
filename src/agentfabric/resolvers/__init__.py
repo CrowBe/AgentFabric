@@ -44,7 +44,7 @@ def load_python_resolver(source: str, path: str) -> ResolverFn:
     try:
         compiled = compile(source, path, "exec")
         exec(compiled, namespace, namespace)  # noqa: S102 — resolvers are trusted local code
-    except Exception as exc:  # pragma: no cover - syntax errors surface as resolver errors
+    except Exception as exc:
         raise ResolverError(f"resolver {path} failed to load: {exc}") from exc
     fn = namespace.get("resolve")
     if not callable(fn):

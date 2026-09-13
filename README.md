@@ -153,8 +153,8 @@ agentfabric inspect
 
 answers:
 
-- What capabilities exist, and which are resolvable?
-- Which resolver backs each one?
+- What capabilities exist, and which are resolvable, unresolved, or unavailable?
+- Which resolver backs each one? A missing or broken local resolver degrades that capability instead of failing inspect.
 - Which principals exist, and what has been granted?
 - Which resources are known (as refs and labels, not locators)?
 - What was recently invoked?

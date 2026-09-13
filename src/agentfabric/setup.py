@@ -21,7 +21,12 @@ def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
     unresolved = [
         cap_id
         for cap_id in sorted(fabric.capabilities)
-        if fabric.resolution_of(cap_id).status != "resolved"
+        if fabric.resolution_of(cap_id).status == "unresolved"
+    ]
+    unavailable = [
+        cap_id
+        for cap_id in sorted(fabric.capabilities)
+        if fabric.resolution_of(cap_id).status == "unavailable"
     ]
     resolved_ids = {
         cap_id
@@ -41,6 +46,7 @@ def setup(home: Path, *, sop_root: Path | None = None) -> dict[str, Any]:
             for view in views
         ],
         "unresolved": unresolved,
+        "unavailable": unavailable,
         "opportunities": opportunities,
         "next": [
             "Prefer agentsop_invoke / `agentfabric invoke` for named work.",
@@ -63,6 +69,13 @@ def render_setup(report: dict[str, Any]) -> str:
     lines.append("Unresolved (named, not yet crystallised)")
     if report["unresolved"]:
         for cap_id in report["unresolved"]:
+            lines.append(f"  {cap_id}")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append("Unavailable (recorded resolver missing or broken)")
+    if report.get("unavailable"):
+        for cap_id in report["unavailable"]:
             lines.append(f"  {cap_id}")
     else:
         lines.append("  (none)")
