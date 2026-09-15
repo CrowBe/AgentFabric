@@ -87,7 +87,7 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
 - **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
 - **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
-- **`authority.effects`** — effects that must be granted. Usually the same as `effects`.
+- **`authority.effects`** — effects that must be granted. The set must equal `effects` (order does not matter; duplicates are invalid). A write-declaring capability cannot authorize as if it were read-only.
 - **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references. Every listed id must exist in the same catalogue, and the graph must be acyclic.
 
 Resolution status is **not** part of the document. Contracts are durable; whether a resolver currently exists is a runtime fact.
