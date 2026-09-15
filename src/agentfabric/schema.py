@@ -199,15 +199,12 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
     )
 
 
-SELECTOR_PROPERTY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
 def parse_authority_selector(pointer: str) -> str:
-    """0.1: only a top-level scalar field, e.g. input.resource."""
+    """0.1: only a top-level field, e.g. input.resource or input.resource-ref."""
     if not isinstance(pointer, str) or not pointer.startswith("input."):
         raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
     rest = pointer[len("input.") :]
-    if not rest or "." in rest or rest == "*" or SELECTOR_PROPERTY.match(rest) is None:
+    if not rest or "." in rest or rest == "*":
         raise InvalidInput(
             f"{pointer!r} is not a top-level scalar ResourceRef selector; "
             "nested objects and collections are not supported in 0.1"

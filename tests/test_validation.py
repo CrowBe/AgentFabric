@@ -289,6 +289,21 @@ def test_top_level_scalar_selector_loads() -> None:
     validate_capability_document(_resource_compose_capability("blob.read", depends_on=[]))
 
 
+def test_hyphenated_top_level_selector_loads() -> None:
+    doc = _minimal_capability(
+        id="blob.hyphen",
+        input={
+            "type": "object",
+            "properties": {"resource-ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource-ref"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.resource-ref"], "effects": []},
+    )
+    cap = validate_capability_document(doc)
+    assert cap.authority["resources"] == ["input.resource-ref"]
+
+
 def test_non_ref_field_selector_is_rejected() -> None:
     doc = _minimal_capability(authority={"resources": ["input.text"], "effects": []})
     with pytest.raises(InvalidInput, match="top-level ResourceRef"):

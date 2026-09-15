@@ -66,7 +66,7 @@
         "resources": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Top-level input fields that are ResourceRefs, e.g. input.resource. Nested objects and collections are not supported in 0.1 and are rejected at catalogue load."
+          "description": "Literal top-level input property names prefixed with input., e.g. input.resource or input.resource-ref. Nested objects and collections are not supported in 0.1 and are rejected at catalogue load."
         },
         "effects": {
           "type": "array",
