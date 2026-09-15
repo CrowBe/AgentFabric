@@ -16,6 +16,7 @@ from agentfabric.sync import (
     parse_ownership_leaks,
     read_origin,
     read_repo_ownership,
+    render_sync,
     repo_owned_includes,
     sync_fabric,
 )
@@ -36,6 +37,20 @@ def _cap(cap_id: str, *, title: str | None = None, source: str = "") -> Capabili
         "depends_on": [],
     }
     return validate_capability_document(doc, source=source)
+
+
+def _init_git_repo(path: Path) -> None:
+    try:
+        completed = subprocess.run(
+            ["git", "init", "-q", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - git missing
+        pytest.skip("git is unavailable")
+    if completed.returncode != 0:  # pragma: no cover - git unusable
+        pytest.skip("git could not initialise a scratch repository")
 
 
 def _copy_sop(tmp_path: Path, ids: list[str]) -> Path:
@@ -339,11 +354,21 @@ def test_ownership_manifest_limits_untracked_feedback(tmp_path: Path) -> None:
     }
 
 
-def test_unreadable_ownership_manifest_keeps_classification_fail_safe(tmp_path: Path) -> None:
-    (tmp_path / ".agentfabric-sync.json").write_text(
+@pytest.mark.parametrize(
+    "manifest",
+    [
         '{"version": 1, "repo_owned": {"include": ["src/**",]}}',
-        encoding="utf-8",
-    )
+        '{"version": 1, "repo_owned": {"include": "src/**"}}',
+        '{"version": 1, "repo-owned": {"include": ["src/**"]}}',
+        '{"version": 1, "repo_owned": {"include": []}}',
+        '{"version": 1, "repo_owned": {"include": ["src/**", 7]}}',
+        "[]",
+    ],
+)
+def test_unusable_ownership_manifest_keeps_classification_fail_safe(
+    manifest: str, tmp_path: Path
+) -> None:
+    (tmp_path / ".agentfabric-sync.json").write_text(manifest, encoding="utf-8")
 
     includes, manifest_feedback = read_repo_ownership(tmp_path)
 
@@ -358,6 +383,38 @@ def test_unreadable_ownership_manifest_keeps_classification_fail_safe(tmp_path: 
     )
 
     assert {item["path"] for item in leaks} == {".codex/config.toml"}
+
+
+def test_absent_ownership_manifest_stays_silent(tmp_path: Path) -> None:
+    includes, manifest_feedback = read_repo_ownership(tmp_path)
+
+    assert includes == ("**",)
+    assert manifest_feedback == []
+
+
+def test_sync_report_names_an_unusable_manifest_and_keeps_flagging(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _init_git_repo(checkout)
+    sop = _copy_sop(checkout, ["blob.read"])
+    (checkout / ".agentfabric-sync.json").write_text(
+        '{"version": 1, "repo_owned": {"include": []}}',
+        encoding="utf-8",
+    )
+    (checkout / "examples").mkdir()
+    (checkout / "examples" / "new_resolver.py").write_text("VALUE = 1\n", encoding="utf-8")
+    fabric = Fabric.init(checkout / ".fabric")
+
+    report = sync_fabric(fabric.home, sop_root=sop, apply=False)
+
+    feedback = report["feedback"]
+    manifest_items = [item for item in feedback if item["kind"] == "invalid_ownership_manifest"]
+    assert [item["path"] for item in manifest_items] == [".agentfabric-sync.json"]
+    assert ".agentfabric-sync.json" in manifest_items[0]["message"]
+    leaked = {item["path"] for item in feedback if item["kind"] == "ownership_leak"}
+    assert "examples/new_resolver.py" in leaked
+    assert not any(path.startswith(".fabric/") for path in leaked)
+    assert ".agentfabric-sync.json" in render_sync(report)
 
 
 def test_shipped_ownership_manifest_covers_every_tracked_top_level() -> None:

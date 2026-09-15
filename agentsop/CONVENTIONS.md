@@ -132,7 +132,7 @@ Sync does **not** merge Git. It:
 1. Diffs the current upstream catalogue against the Fabric's origin pin.
 2. Keeps local overlay behaviour unless you intentionally supersede it.
 3. Surfaces genuine conflicts (`id_collision`, `stale_local_resolver`, `capability_removed`) instead of producing a clean Git state. Unresolved conflicts stay visible on later syncs until the local/upstream state actually changes.
-4. Records ownership leaks (dirty git-tracked paths outside `.fabric/`) as feedback that the boundary was crossed.
+4. Records ownership feedback for the checkout outside `.fabric/`. Every dirty git-tracked path is repo-owned. An untracked path is repo-owned when it matches a `repo_owned.include` pattern in `.agentfabric-sync.json`; anything else is machine-local harness state and stays silent. If that manifest exists but cannot be read, or declares no include patterns, sync names it in the same feedback and falls back to treating every untracked path as repo-owned.
 5. Leaves the Fabric inspectable either way.
 
 On an id collision where this Fabric named the capability first, the overlay stays live until you rename it (keep local) or remove it (adopt upstream). On an overlay of an already-owned upstream id, the shipped contract stays live.

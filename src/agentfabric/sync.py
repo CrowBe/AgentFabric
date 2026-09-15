@@ -78,26 +78,37 @@ def git_porcelain(root: Path) -> str:
     return completed.stdout
 
 
+def _unusable_ownership_manifest(reason: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    return ("**",), [
+        {
+            "kind": "invalid_ownership_manifest",
+            "path": REPO_OWNERSHIP_NAME,
+            "message": (
+                f"{REPO_OWNERSHIP_NAME} {reason}; until it is fixed, every untracked "
+                "path outside .fabric/ is reported as repo-owned"
+            ),
+        }
+    ]
+
+
 def read_repo_ownership(root: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    manifest = Path(root) / REPO_OWNERSHIP_NAME
     try:
-        config = read_json(Path(root) / REPO_OWNERSHIP_NAME, {})
+        config = read_json(manifest, {})
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        return ("**",), [
-            {
-                "kind": "unreadable_ownership_manifest",
-                "path": REPO_OWNERSHIP_NAME,
-                "message": (
-                    f"{REPO_OWNERSHIP_NAME} could not be read ({exc}); until it parses, "
-                    "every untracked path outside .fabric/ is reported as repo-owned"
-                ),
-            }
-        ]
+        return _unusable_ownership_manifest(f"could not be read ({exc})")
     repo_owned = config.get("repo_owned") if isinstance(config, dict) else None
     includes = repo_owned.get("include") if isinstance(repo_owned, dict) else None
-    if not isinstance(includes, list) or not all(
-        isinstance(pattern, str) and pattern for pattern in includes
+    if (
+        not isinstance(includes, list)
+        or not includes
+        or not all(isinstance(pattern, str) and pattern for pattern in includes)
     ):
-        return ("**",), []
+        if not manifest.is_file():
+            return ("**",), []
+        return _unusable_ownership_manifest(
+            "does not declare repo_owned.include as a non-empty list of path patterns"
+        )
     return tuple(includes), []
 
 
