@@ -16,11 +16,13 @@ from agentfabric.catalogue import (
     validate_dependency_graph,
 )
 from agentfabric.errors import (
+    DependencyBlocked,
     DependencyFailed,
     FabricError,
     InvalidInput,
     InvalidRef,
     ResolverError,
+    ResolverUnavailable,
     UndeclaredDependency,
     UnknownCapability,
     Unresolved,
@@ -222,7 +224,7 @@ class Fabric:
                         "id": "operator",
                         "privileges": ["inspect", "crystallise", "fallback"],
                     },
-                    {"id": "guest", "privileges": ["inspect"]},
+                    {"id": "guest", "privileges": []},
                 ]
             },
         )
@@ -442,12 +444,18 @@ class Fabric:
                 nested=nested,
             )
         )
-        if not nested and not result.ok and result.error and result.error.code == "UNRESOLVED":
+        if not nested and not result.ok and result.error and result.error.code in {
+            "UNRESOLVED",
+            "RESOLVER_UNAVAILABLE",
+            "DEPENDENCY_BLOCKED",
+        }:
             from agentfabric.notice import record as record_opportunity
 
             view = self.resolution_of(capability_id) if capability_id in self.capabilities else None
             if view is not None and view.status == "unavailable":
                 summary = f"{capability_id} resolver is missing or broken"
+            elif view is not None and view.status == "blocked":
+                summary = f"{capability_id} is blocked on unresolved or unavailable dependencies"
             else:
                 summary = f"{capability_id} is in the catalogue but has no resolver"
             record_opportunity(
@@ -498,7 +506,7 @@ class Fabric:
                 f"capability {capability_id} has no resolver; crystallise one to make it available"
             )
         if view.status == "unavailable":
-            raise Unresolved(
+            raise ResolverUnavailable(
                 f"capability {capability_id} resolver is unavailable: {view.detail}"
             )
         if view.status == "blocked":
@@ -507,7 +515,7 @@ class Fabric:
                 for dep in cap.depends_on
                 if self.resolution_of(dep).status != "resolved"
             ]
-            raise Unresolved(
+            raise DependencyBlocked(
                 f"capability {capability_id} is blocked on unresolved dependencies: {missing}"
             )
         binding = self._bindings[capability_id]
@@ -649,7 +657,7 @@ class Fabric:
             f"{exc}\n"
         )
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, viewer: str | None = None) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
         from agentfabric.notice import open_opportunities
 
@@ -674,6 +682,13 @@ class Fabric:
                 }
                 for cap_id in self.catalogue_collisions
             ]
+        invocations = self.audit.recent(50)
+        if viewer is not None:
+            principal = self.authority.require_principal(viewer)
+            # crystallise marks control-plane ownership. Inspect without it
+            # still sees capability status, but not other principals' payloads.
+            if not principal.has_privilege("crystallise"):
+                invocations = [_invocation_for_viewer(item, viewer) for item in invocations]
         return {
             "home": str(self.home),
             "agentsop": "0.1",
@@ -693,7 +708,7 @@ class Fabric:
             ],
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
-            "invocations": self.audit.recent(50),
+            "invocations": invocations,
             "audit": dict(self._audit_health),
             "opportunities": open_opportunities(self.home, resolved=resolved),
         }
@@ -715,3 +730,13 @@ def default_home() -> Path:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def _invocation_for_viewer(item: dict[str, Any], viewer: str) -> dict[str, Any]:
+    """Audit payloads are protected. Own invocations stay intact; others redact."""
+    if item.get("principal") == viewer:
+        return item
+    redacted = dict(item)
+    redacted["input"] = {"redacted": True}
+    redacted["output_preview"] = {"redacted": True}
+    return redacted
