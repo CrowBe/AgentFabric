@@ -5,6 +5,7 @@ from pathlib import Path
 from agentfabric.demo import WORD_COUNT_SOURCE
 from agentfabric.fabric import Fabric
 from agentfabric.inspect import render_snapshot
+from agentfabric.schema import validate_capability_document
 
 
 def _crystallised_path(fabric: Fabric, info: dict[str, str]) -> Path:
@@ -38,7 +39,7 @@ def test_missing_crystallised_resolver_degrades_on_reload(fabric: Fabric) -> Non
 
     result = reloaded.invoke("operator", "text.word_count", {"text": "one two three"})
     assert not result.ok
-    assert result.error.code == "UNRESOLVED"
+    assert result.error.code == "RESOLVER_UNAVAILABLE"
     assert "unavailable" in result.error.message
     assert "missing" in result.error.message
     opportunities = reloaded.snapshot()["opportunities"]
@@ -69,7 +70,7 @@ def test_corrupt_crystallised_resolver_degrades_on_reload(fabric: Fabric) -> Non
 
     result = reloaded.invoke("operator", "text.word_count", {"text": "one two"})
     assert not result.ok
-    assert result.error.code == "UNRESOLVED"
+    assert result.error.code == "RESOLVER_UNAVAILABLE"
     assert "unavailable" in result.error.message
     assert "failed to load" in result.error.message
 
@@ -88,7 +89,7 @@ def test_unreadable_crystallised_resolver_degrades_on_reload(fabric: Fabric) -> 
 
     result = reloaded.invoke("operator", "text.word_count", {"text": "one"})
     assert not result.ok
-    assert result.error.code == "UNRESOLVED"
+    assert result.error.code == "RESOLVER_UNAVAILABLE"
     assert "not valid text" in result.error.message
 
 
@@ -106,3 +107,77 @@ def test_re_crystallise_repairs_unavailable_resolver(fabric: Fabric) -> None:
     result = reloaded.invoke("operator", "text.word_count", {"text": "one two three"})
     assert result.ok
     assert result.output["count"] == 3
+
+
+def test_never_bound_capability_invokes_as_unresolved(fabric: Fabric) -> None:
+    view = fabric.resolution_of("text.word_count")
+    assert view.status == "unresolved"
+    result = fabric.invoke("operator", "text.word_count", {"text": "one two"})
+    assert not result.ok
+    assert result.error.code == "UNRESOLVED"
+
+
+def test_unreadable_resolver_file_is_unavailable(fabric: Fabric) -> None:
+    info = fabric.crystallise("operator", "text.word_count", WORD_COUNT_SOURCE)
+    path = _crystallised_path(fabric, info)
+    path.chmod(0)
+
+    try:
+        reloaded = Fabric(fabric.home)
+        view = reloaded.resolution_of("text.word_count")
+        assert view.status == "unavailable"
+        assert view.detail is not None
+        assert "unreadable" in view.detail or "failed to load" in view.detail
+        result = reloaded.invoke("operator", "text.word_count", {"text": "one"})
+        assert not result.ok
+        assert result.error.code == "RESOLVER_UNAVAILABLE"
+    finally:
+        path.chmod(0o644)
+
+
+def test_blocked_dependency_has_distinct_invocation_code(fabric: Fabric) -> None:
+    fabric.capabilities["compose.words"] = validate_capability_document(
+        {
+            "agentsop": "0.1",
+            "id": "compose.words",
+            "title": "Compose words",
+            "description": "Depends on an unresolved capability.",
+            "input": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            "output": {
+                "type": "object",
+                "properties": {"count": {"type": "integer"}},
+                "required": ["count"],
+                "additionalProperties": False,
+            },
+            "effects": [],
+            "idempotent": True,
+            "authority": {"resources": [], "effects": []},
+            "depends_on": ["text.word_count"],
+        }
+    )
+    fabric.crystallise(
+        "operator",
+        "compose.words",
+        """
+def resolve(ctx, input):
+    return ctx.invoke("text.word_count", input)
+""",
+    )
+    view = fabric.resolution_of("compose.words")
+    assert view.status == "blocked"
+    result = fabric.invoke("operator", "compose.words", {"text": "one two"})
+    assert not result.ok
+    assert result.error.code == "DEPENDENCY_BLOCKED"
+    assert result.error.code != "UNRESOLVED"
+    assert result.error.code != "DEPENDENCY_FAILED"
+    assert "text.word_count" in result.error.message
+    opportunities = fabric.snapshot()["opportunities"]
+    assert any(
+        item.get("capability") == "compose.words" and "blocked" in item.get("summary", "")
+        for item in opportunities
+    )
