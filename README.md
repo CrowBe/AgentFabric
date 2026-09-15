@@ -73,7 +73,7 @@ agentfabric invoke workspace.discover '{}'
 agentfabric invoke -p guest journal.append '{"resource":{"ref":"rf_…","kind":"journal"},"entry":"nope"}'
 ```
 
-Each CLI `invoke` is a new process. The runtime's idempotency cache is process-local, so the CLI does not accept `--idempotency-key`; that flag would imply replay across commands that it cannot provide. Long-lived bindings such as MCP may still pass `idempotency_key`. AgentSOP still declares `idempotent` on capability documents.
+Each CLI `invoke` is a new process. Neither the CLI, the MCP binding, nor `Fabric.invoke` accepts an `idempotency_key`; unexpected MCP fields are rejected. `idempotent` on a capability document is a semantic property of the operation, not a promise that a binding maintains a replay cache. Persistent replay is deferred.
 
 ### Crystallise the unresolved capability
 
@@ -101,7 +101,7 @@ Project MCP config lives in [`.cursor/mcp.json`](.cursor/mcp.json). Tools:
 
 | Tool | What it is |
 | --- | --- |
-| `agentsop_list` / `agentsop_invoke` | Semantic catalogue and invocation |
+| `agentsop_list` / `agentsop_invoke` | Semantic catalogue (full public contract: input, output, effects, authority, dependencies, idempotency, plus resolution status) and invocation |
 | `fabric_inspect` / `fabric_crystallise` | Control plane (privileged) |
 | `fallback_exec` | **Not** AgentSOP. Broader execution for novel work the Fabric does not yet name. |
 
@@ -140,7 +140,7 @@ A fresh Fabric has two principals:
 knowing a locator  ≠  possessing a ResourceRef  ≠  having authority to act on it
 ```
 
-`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Removal uses `blob.delete` with the same kind of handle and a distinct `delete` grant; create/write authority is not enough. After a successful delete the ResourceRef is immediately unknown, and the capability returns `{"deleted": true}` rather than echoing the retired handle. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE`. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF`.
+`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Removal uses `blob.delete` with the same kind of handle and a distinct `delete` grant; create/write authority is not enough. After a successful delete the ResourceRef is immediately unknown, and the capability returns `{"deleted": true}` rather than echoing the retired handle. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE` for a Principal who is granted the capability. A Principal without a matching grant receives `DENIED` for both issued and unknown well-formed refs, so ResourceRefs are not an existence oracle. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF` regardless of grants.
 
 The owner of the Fabric chooses the trust model. AgentFabric only provides the mechanism.
 
