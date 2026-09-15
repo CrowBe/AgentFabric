@@ -116,16 +116,23 @@ class ResourceRegistry:
     def delete(self, resource: ResourceRef, *kinds: str) -> ResourceRecord:
         record = self.require(resource, *kinds)
         path = self.locator_path(record)
+        backup: bytes | None = None
+        existed = False
+        if path.is_file():
+            backup = path.read_bytes()
+            existed = True
+            path.unlink()
+        elif path.exists():
+            raise OSError(f"refuses to delete non-file locator: {path}")
         del self._records[record.ref]
         try:
             self._save()
         except Exception:
             self._records[record.ref] = record
+            if existed and backup is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(backup)
             raise
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
         return record
 
 

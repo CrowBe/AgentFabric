@@ -172,6 +172,7 @@ def test_delete_save_failure_does_not_commit(fabric: Fabric, monkeypatch) -> Non
     assert not result.ok
     assert result.error.code == "RESOLVER_ERROR"
     assert locator.is_file()
+    assert locator.read_text(encoding="utf-8") == "keep"
     assert fabric.resources.get(created["ref"]).kind == "blob"
 
     monkeypatch.undo()
@@ -181,6 +182,46 @@ def test_delete_save_failure_does_not_commit(fabric: Fabric, monkeypatch) -> Non
     assert deleted.ok
     assert deleted.output == {"deleted": True}
     assert not locator.exists()
+
+
+def test_delete_unlink_failure_does_not_commit_or_reissue(fabric: Fabric, monkeypatch) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "keep-on-unlink-fail.md", "text": "still here"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    original = locator.read_bytes()
+    real_unlink = Path.unlink
+
+    def boom(self, *args, **kwargs):
+        if self.resolve() == locator.resolve():
+            raise OSError("simulated unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    result = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+    assert locator.is_file()
+    assert locator.read_bytes() == original
+    assert fabric.resources.get(created["ref"]).locator == str(locator.resolve())
+
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output["resources"]
+    matching = [item for item in discovered if item["resource"]["ref"] == created["ref"]]
+    assert matching == [{"resource": created, "label": "keep-on-unlink-fail.md"}]
+    assert [
+        item["label"] for item in discovered if item["label"] == "keep-on-unlink-fail.md"
+    ] == ["keep-on-unlink-fail.md"]
+
+    monkeypatch.undo()
+    deleted = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output == {"deleted": True}
+    assert not locator.exists()
+    rediscovered = fabric.invoke("operator", "workspace.discover", {}).output["resources"]
+    assert created["ref"] not in [item["resource"]["ref"] for item in rediscovered]
+    assert "keep-on-unlink-fail.md" not in {item["label"] for item in rediscovered}
 
 
 def test_delete_rejects_journal_kind(fabric: Fabric) -> None:
