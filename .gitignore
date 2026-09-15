@@ -9,6 +9,7 @@ __pycache__/
 dist/
 build/
 .fabric/
+.codex/
 *.egg
 .coverage
 htmlcov/
