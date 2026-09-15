@@ -20,9 +20,11 @@ from agentfabric.errors import (
     FabricError,
     InvalidInput,
     InvalidRef,
+    KindMismatch,
     ResolverError,
     UndeclaredDependency,
     UnknownCapability,
+    UnknownResource,
     Unresolved,
 )
 from agentfabric.grants import Authority
@@ -31,7 +33,7 @@ from agentfabric.resolvers import ResolverBinding, ResolverFn, load_python_resol
 from agentfabric.resolvers import blob_create, blob_read, blob_replace, journal_append, journal_digest
 from agentfabric.resolvers import text_normalize, workspace_discover
 from agentfabric.resources import ResourceRegistry, _is_inside
-from agentfabric.schema import extract_resource_refs, validate_against
+from agentfabric.schema import collect_resource_refs, extract_resource_refs, validate_against
 from agentfabric.store import read_json, write_json
 from agentfabric.sync import read_origin, record_origin
 from agentfabric.types import (
@@ -519,7 +521,9 @@ class Fabric:
             raise ResolverError(f"resolver {binding.label} raised: {exc}") from exc
         try:
             typed_output = validate_against(cap.output, output, path="output")
-        except (InvalidInput, InvalidRef) as exc:
+            for ref_dict in collect_resource_refs(cap.output, typed_output):
+                self.resources.require(ResourceRef.from_dict(ref_dict))
+        except (InvalidInput, InvalidRef, UnknownResource, KindMismatch) as exc:
             raise ResolverError(
                 f"resolver {binding.label} returned invalid output: {exc.message}"
             ) from exc

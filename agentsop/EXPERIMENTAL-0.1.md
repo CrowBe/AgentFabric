@@ -110,6 +110,8 @@ Discovery may return a human `label` *alongside* a ResourceRef. The label is not
 
 A fabric may store an implementation locator internally. Agents are not given it.
 
+Resolver **output** ResourceRefs are the same handles. A well-formed `{ "ref", "kind" }` that this fabric never issued, or whose kind does not match the registry, is invalid resolver output (`RESOLVER_ERROR`), not a successful mint.
+
 ---
 
 ## Effects
