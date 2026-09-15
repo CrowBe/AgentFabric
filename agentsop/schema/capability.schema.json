@@ -66,7 +66,7 @@
         "resources": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Input paths to ResourceRefs, e.g. input.resource. Empty if none."
+          "description": "input. plus a top-level property name that does not contain '.'. Nested objects, collections, and dotted property names are not supported in 0.1 and are rejected at catalogue load."
         },
         "effects": {
           "type": "array",
