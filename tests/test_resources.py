@@ -142,7 +142,7 @@ def test_delete_is_ref_scoped_and_immediately_unknown(fabric: Fabric) -> None:
     assert locator.is_file()
     deleted = fabric.invoke("operator", "blob.delete", {"resource": created})
     assert deleted.ok
-    assert deleted.output["resource"] == created
+    assert deleted.output == {"deleted": True}
     assert not locator.exists()
     reread = fabric.invoke("operator", "blob.read", {"resource": created})
     assert not reread.ok

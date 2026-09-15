@@ -125,7 +125,7 @@ Adding an effect is an AgentSOP / schema revision (`capability.schema.json`). An
 | `create` | Introduce a new resource. |
 | `write` | Replace content. |
 | `append` | Add to existing content. |
-| `delete` | Remove a resource. Distinct from `write`; deletion cannot masquerade as replacement. After a successful delete, the ResourceRef is immediately unknown to this fabric: later read/discovery do not return it. |
+| `delete` | Remove a resource. Distinct from `write`; deletion cannot masquerade as replacement. After a successful delete, the ResourceRef is immediately unknown to this fabric: later read/discovery do not return it. Delete capabilities return a non-ResourceRef receipt (for example `{"deleted": true}`), not the retired handle. |
 
 Pure transformations declare `effects: []`.
 
