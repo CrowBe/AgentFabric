@@ -471,13 +471,16 @@ class Fabric:
             raise InvalidInput("input must be an object")
         typed_input = validate_against(cap.input, input_value)
         refs = extract_resource_refs(cap, typed_input)
+        resource_keys = [item["ref"] for item in refs] or [None]
+        effects = list(cap.authority.get("effects", cap.effects))
+        # Authority is evaluated against the caller-supplied ref id before
+        # existence/kind. Unauthorized callers must not learn whether a
+        # well-formed handle was issued.
+        for resource_key in resource_keys:
+            self.authority.allow(principal, capability_id, resource_key, effects)
         for ref_dict in refs:
             ref = ResourceRef.from_dict(ref_dict)
             self.resources.require(ref)
-        resource_keys = [item["ref"] for item in refs] or [None]
-        effects = list(cap.authority.get("effects", cap.effects))
-        for resource_key in resource_keys:
-            self.authority.allow(principal, capability_id, resource_key, effects)
 
         if cap.idempotent and idempotency_key:
             cache_key = f"{principal}:{capability_id}:{idempotency_key}"
