@@ -54,8 +54,13 @@ def tools() -> list[dict[str, Any]]:
         {
             "name": "fabric_inspect",
             "description": (
-                "Inspect the current Fabric: capabilities, resolution, principals, "
-                "grants, known resources, and recent invocations. Requires the inspect privilege."
+                "Inspect this Fabric's control-plane snapshot: capabilities, "
+                "resolution, principals, grants, known resources, and recent "
+                "invocations. Requires the inspect privilege. Full invocation "
+                "payloads are owner/control-plane data (principals with "
+                "crystallise). Other inspectors receive capability status and "
+                "redacted foreign payloads. Agent-safe catalogue discovery is "
+                "agentsop_list, not this tool."
             ),
             "inputSchema": {
                 "type": "object",
@@ -138,7 +143,7 @@ class McpBinding:
             ).to_dict()
         if name == "fabric_inspect":
             self.fabric.authority.require_privilege(self.principal, "inspect")
-            snapshot = self.fabric.snapshot()
+            snapshot = self.fabric.snapshot(viewer=self.principal)
             if args.get("format") == "json":
                 return snapshot
             return render_snapshot(snapshot)

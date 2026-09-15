@@ -221,7 +221,7 @@ class Fabric:
                         "id": "operator",
                         "privileges": ["inspect", "crystallise", "fallback"],
                     },
-                    {"id": "guest", "privileges": ["inspect"]},
+                    {"id": "guest", "privileges": []},
                 ]
             },
         )
@@ -627,7 +627,7 @@ class Fabric:
             "note": "fallback.exec is a harness escape hatch, not an AgentSOP capability",
         }
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, viewer: str | None = None) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
         from agentfabric.notice import open_opportunities
 
@@ -652,6 +652,13 @@ class Fabric:
                 }
                 for cap_id in self.catalogue_collisions
             ]
+        invocations = self.audit.recent(50)
+        if viewer is not None:
+            principal = self.authority.require_principal(viewer)
+            # crystallise marks control-plane ownership. Inspect without it
+            # still sees capability status, but not other principals' payloads.
+            if not principal.has_privilege("crystallise"):
+                invocations = [_invocation_for_viewer(item, viewer) for item in invocations]
         return {
             "home": str(self.home),
             "agentsop": "0.1",
@@ -671,7 +678,7 @@ class Fabric:
             ],
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
-            "invocations": self.audit.recent(50),
+            "invocations": invocations,
             "opportunities": open_opportunities(self.home, resolved=resolved),
         }
 
@@ -692,3 +699,13 @@ def default_home() -> Path:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def _invocation_for_viewer(item: dict[str, Any], viewer: str) -> dict[str, Any]:
+    """Audit payloads are protected. Own invocations stay intact; others redact."""
+    if item.get("principal") == viewer:
+        return item
+    redacted = dict(item)
+    redacted["input"] = {"redacted": True}
+    redacted["output_preview"] = {"redacted": True}
+    return redacted
