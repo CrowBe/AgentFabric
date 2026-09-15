@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from agentfabric.catalogue import find_agentsop_root, merge_catalogue
 from agentfabric.cli import main
@@ -12,6 +15,7 @@ from agentfabric.schema import validate_capability_document
 from agentfabric.sync import (
     parse_ownership_leaks,
     read_origin,
+    read_repo_ownership,
     repo_owned_includes,
     sync_fabric,
 )
@@ -333,6 +337,59 @@ def test_ownership_manifest_limits_untracked_feedback(tmp_path: Path) -> None:
         "src/agentfabric/new_module.py",
         "DESIGN.md",
     }
+
+
+def test_unreadable_ownership_manifest_keeps_classification_fail_safe(tmp_path: Path) -> None:
+    (tmp_path / ".agentfabric-sync.json").write_text(
+        '{"version": 1, "repo_owned": {"include": ["src/**",]}}',
+        encoding="utf-8",
+    )
+
+    includes, manifest_feedback = read_repo_ownership(tmp_path)
+
+    assert includes == ("**",)
+    assert repo_owned_includes(tmp_path) == ("**",)
+    assert [item["path"] for item in manifest_feedback] == [".agentfabric-sync.json"]
+    assert ".agentfabric-sync.json" in manifest_feedback[0]["message"]
+
+    leaks = parse_ownership_leaks(
+        "\n".join(["?? .codex/config.toml", "?? .fabric/capabilities/text.hash.json"]),
+        untracked_includes=includes,
+    )
+
+    assert {item["path"] for item in leaks} == {".codex/config.toml"}
+
+
+def test_shipped_ownership_manifest_covers_every_tracked_top_level() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - git missing
+        pytest.skip("git is unavailable")
+    if tracked.returncode != 0:  # pragma: no cover - not a checkout
+        pytest.skip("tests are not running inside a git checkout")
+
+    top_level_dirs = sorted(
+        {line.split("/", 1)[0] for line in tracked.stdout.splitlines() if "/" in line}
+    )
+    assert "examples" in top_level_dirs
+    probes = [f"{name}/ownership-probe.md" for name in top_level_dirs]
+    porcelain = "\n".join(
+        [f"?? {probe}" for probe in probes]
+        + ["?? .codex/config.toml", "?? .fabric/capabilities/text.hash.json"]
+    )
+
+    leaks = parse_ownership_leaks(
+        porcelain,
+        untracked_includes=repo_owned_includes(repo_root),
+    )
+
+    assert {item["path"] for item in leaks} == set(probes)
 
 
 def test_cli_scaffold_and_sync(tmp_path: Path, capsys) -> None:

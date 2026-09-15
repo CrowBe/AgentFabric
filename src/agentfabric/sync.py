@@ -8,6 +8,7 @@ conflicts that need a semantic decision.
 from __future__ import annotations
 
 from fnmatch import fnmatchcase
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -77,15 +78,31 @@ def git_porcelain(root: Path) -> str:
     return completed.stdout
 
 
-def repo_owned_includes(root: Path) -> tuple[str, ...]:
-    config = read_json(Path(root) / REPO_OWNERSHIP_NAME, {})
+def read_repo_ownership(root: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    try:
+        config = read_json(Path(root) / REPO_OWNERSHIP_NAME, {})
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return ("**",), [
+            {
+                "kind": "unreadable_ownership_manifest",
+                "path": REPO_OWNERSHIP_NAME,
+                "message": (
+                    f"{REPO_OWNERSHIP_NAME} could not be read ({exc}); until it parses, "
+                    "every untracked path outside .fabric/ is reported as repo-owned"
+                ),
+            }
+        ]
     repo_owned = config.get("repo_owned") if isinstance(config, dict) else None
     includes = repo_owned.get("include") if isinstance(repo_owned, dict) else None
     if not isinstance(includes, list) or not all(
         isinstance(pattern, str) and pattern for pattern in includes
     ):
-        return ("**",)
-    return tuple(includes)
+        return ("**",), []
+    return tuple(includes), []
+
+
+def repo_owned_includes(root: Path) -> tuple[str, ...]:
+    return read_repo_ownership(root)[0]
 
 
 def _matches_repo_owned(path: str, patterns: tuple[str, ...]) -> bool:
@@ -373,10 +390,12 @@ def sync_fabric(
     git_root = discover_git_root(root)
     feedback: list[dict[str, Any]] = []
     if git_root is not None:
+        includes, manifest_feedback = read_repo_ownership(git_root)
+        feedback.extend(manifest_feedback)
         feedback.extend(
             parse_ownership_leaks(
                 git_porcelain(git_root),
-                untracked_includes=repo_owned_includes(git_root),
+                untracked_includes=includes,
             )
         )
 
