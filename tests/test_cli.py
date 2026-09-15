@@ -32,6 +32,9 @@ def test_cli_rejects_idempotency_key(capsys: pytest.CaptureFixture[str]) -> None
     assert "--idempotency-key" in err
 
 
-def test_mcp_invoke_still_accepts_idempotency_key() -> None:
+def test_mcp_invoke_does_not_accept_idempotency_key() -> None:
     invoke = next(tool for tool in tools() if tool["name"] == "agentsop_invoke")
-    assert "idempotency_key" in invoke["inputSchema"]["properties"]
+    assert "idempotency_key" not in invoke["inputSchema"]["properties"]
+    description = invoke["description"].lower()
+    assert "idempotency_key" in description
+    assert "semantic" in description

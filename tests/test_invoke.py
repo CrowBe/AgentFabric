@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+from agentfabric.bindings.mcp import McpBinding
+from agentfabric.errors import InvalidInput
 from agentfabric.fabric import Fabric
 
 
@@ -48,19 +52,32 @@ def test_invalid_input(fabric: Fabric) -> None:
     assert result.error.code == "INVALID_INPUT"
 
 
-def test_idempotent_replay(fabric: Fabric) -> None:
-    first = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "  hello  "},
-        idempotency_key="k1",
-    )
-    second = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "  different  "},
-        idempotency_key="k1",
-    )
+def test_runtime_invoke_does_not_accept_an_idempotency_key(fabric: Fabric) -> None:
+    with pytest.raises(TypeError):
+        fabric.invoke(
+            "operator",
+            "text.normalize",
+            {"text": "alpha"},
+            idempotency_key="same-key",  # type: ignore[call-arg]
+        )
+
+
+def test_non_idempotent_create_repeats_the_effect(fabric: Fabric) -> None:
+    first = fabric.invoke("operator", "blob.create", {"label": "once.md", "text": "a"})
+    second = fabric.invoke("operator", "blob.create", {"label": "once.md", "text": "a"})
     assert first.ok and second.ok
-    assert second.output == first.output
-    assert first.output["text"] == "hello"
+    assert first.output["resource"]["ref"] != second.output["resource"]["ref"]
+
+
+def test_mcp_invoke_rejects_an_idempotency_key(fabric: Fabric) -> None:
+    binding = McpBinding(fabric, "operator")
+    with pytest.raises(InvalidInput, match="idempotency_key"):
+        binding.handle_tool(
+            "agentsop_invoke",
+            {
+                "capability": "text.normalize",
+                "input": {"text": "hello"},
+                "idempotency_key": "should-not-be-a-field",
+            },
+        )
+

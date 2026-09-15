@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from agentfabric.errors import Denied
-from agentfabric.fabric import Fabric
+from agentfabric.fabric import Fabric, dumps
 from agentfabric.inspect import render_snapshot
+from agentfabric.bindings.mcp import McpBinding
 
 
 def test_inspect_answers_owner_questions(fabric: Fabric) -> None:
@@ -34,8 +35,12 @@ def test_inspect_answers_owner_questions(fabric: Fabric) -> None:
     assert any(item["capability"] == "text.word_count" for item in fabric.snapshot()["opportunities"])
 
 
-def test_guest_may_inspect(fabric: Fabric) -> None:
-    fabric.authority.require_privilege("guest", "inspect")
+def test_guest_cannot_inspect_by_default(fabric: Fabric) -> None:
+    try:
+        fabric.authority.require_privilege("guest", "inspect")
+    except Denied:
+        return
+    raise AssertionError("guest should lack inspect")
 
 
 def test_guest_cannot_fallback_privilege(fabric: Fabric) -> None:
@@ -44,3 +49,38 @@ def test_guest_cannot_fallback_privilege(fabric: Fabric) -> None:
     except Denied:
         return
     raise AssertionError("guest should lack fallback")
+
+
+def test_guest_inspect_does_not_disclose_operator_payloads(fabric: Fabric) -> None:
+    secret = "STRESS_SECRET_DO_NOT_EXPOSE_48f491"
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "private.txt", "text": secret},
+    )
+    assert created.ok
+    binding = McpBinding(fabric, "guest")
+    try:
+        binding.handle_tool("fabric_inspect", {"format": "json"})
+    except Denied:
+        pass
+    else:
+        raise AssertionError("default guest must not inspect")
+    listed = dumps(binding.handle_tool("agentsop_list", {}))
+    assert secret not in listed
+
+    fabric.principals["guest"].privileges.append("inspect")
+    snapshot = McpBinding(fabric, "guest").handle_tool("fabric_inspect", {"format": "json"})
+    blob = dumps(snapshot)
+    assert secret not in blob
+    operator_invocations = [
+        item for item in snapshot["invocations"] if item.get("principal") == "operator"
+    ]
+    assert operator_invocations
+    for item in operator_invocations:
+        assert item["input"] == {"redacted": True}
+        assert item["output_preview"] == {"redacted": True}
+    assert any(cap["id"] == "blob.create" and cap["status"] == "resolved" for cap in snapshot["capabilities"])
+
+    owner = McpBinding(fabric, "operator").handle_tool("fabric_inspect", {"format": "json"})
+    assert secret in dumps(owner)
