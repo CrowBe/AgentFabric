@@ -163,6 +163,7 @@ answers:
 - Which principals exist, and what has been granted?
 - Which resources are known (as refs and labels, not locators)?
 - What was recently invoked?
+- Is audit recording healthy, or has persistence degraded?
 - What opportunities to extend the library have been noticed?
 - What is upstream-owned vs local overlay, and are there sync conflicts?
 
