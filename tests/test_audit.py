@@ -77,3 +77,17 @@ def test_audit_failure_does_not_audit_itself(fabric: Fabric, monkeypatch) -> Non
     fabric.invoke("operator", "text.normalize", {"text": "a"})
     fabric.invoke("guest", "blob.create", {"label": "x.md", "text": "no"})
     assert counter["n"] == 2
+
+
+def test_audit_health_recovers_after_later_success(fabric: Fabric, monkeypatch) -> None:
+    _break_audit(fabric, monkeypatch)
+    failed = fabric.invoke("operator", "text.normalize", {"text": "  hello  "})
+    assert failed.ok
+    assert fabric.snapshot()["audit"]["ok"] is False
+    monkeypatch.undo()
+    recovered = fabric.invoke("operator", "text.normalize", {"text": "  world  "})
+    assert recovered.ok
+    health = fabric.snapshot()["audit"]
+    assert health == {"ok": True, "error": None}
+    text = render_snapshot(fabric.snapshot())
+    assert "degraded" not in text

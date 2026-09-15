@@ -634,6 +634,8 @@ class Fabric:
             self.audit.record(record)
         except Exception as exc:
             self._note_audit_failure(exc)
+            return
+        self._audit_health = {"ok": True, "error": None}
 
     def _note_audit_failure(self, exc: BaseException) -> None:
         import sys
