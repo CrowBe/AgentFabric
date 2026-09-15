@@ -85,7 +85,7 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`id`** — stable name, dotted, lowercase. Example: `blob.read`.
 - **`input` / `output`** — JSON Schema objects. 0.1 uses a small subset: `object`, `string`, `integer`, `array`, `boolean`, `required`, `additionalProperties`, `enum`, and `$ref` to `ResourceRef`.
 - **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
-- **`idempotent`** — if true, a caller may supply an `idempotency_key`. A runtime that honours replay MUST bind that key to Principal, Capability, **and** a canonical digest of the typed input. Same key plus equivalent typed input replays the original Result. Same key plus different typed input MUST fail with `IDEMPOTENCY_CONFLICT` rather than returning a false success. If false, the capability does not declare retry safety: supplying a key MUST NOT suppress a new effect (the runtime ignores the key). Replay scope and lifetime are a binding concern, not part of the document.
+- **`idempotent`** — semantic property of the operation: repeating equivalent typed input is expected to have the same kind of result without additional caller-visible effects. It is **not** a promise that a binding maintains a replay cache. 0.1 bindings (CLI and MCP) do not accept an `idempotency_key`. Persistent replay, canonical request digests, and effectful retry receipts are deferred until an effectful idempotent capability creates a concrete need.
 - **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
 - **`authority.effects`** — effects that must be granted. Usually the same as `effects`.
 - **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references. Every listed id must exist in the same catalogue, and the graph must be acyclic.
@@ -155,7 +155,6 @@ Every invocation yields one Result:
 | `KIND_MISMATCH` | Resource kind did not match what the capability requires. |
 | `DEPENDENCY_FAILED` | A composed invocation failed (unresolved, denied, or inner error). |
 | `UNDECLARED_DEPENDENCY` | A resolver invoked a capability not listed in its `depends_on`. |
-| `IDEMPOTENCY_CONFLICT` | An `idempotency_key` was reused for this Principal and Capability with a different typed input. |
 | `RESOLVER_ERROR` | Trusted resolver raised or returned an invalid output. |
 
 These codes are part of the contract. Messages are not.

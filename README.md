@@ -73,7 +73,7 @@ agentfabric invoke workspace.discover '{}'
 agentfabric invoke -p guest journal.append '{"resource":{"ref":"rf_…","kind":"journal"},"entry":"nope"}'
 ```
 
-Each CLI `invoke` is a new process. The runtime's idempotency cache is **process-local**, so the CLI does not accept `--idempotency-key`; that flag would imply replay across commands that it cannot provide. The long-lived stdio MCP server may pass `idempotency_key`: replay lasts for that process only, is bound to Principal + Capability + a digest of typed input, and a reused key with different input returns `IDEMPOTENCY_CONFLICT`. Capabilities with `idempotent: false` (including `blob.create`) ignore the key; retrying them performs a new effect. AgentSOP still declares `idempotent` on capability documents.
+Each CLI `invoke` is a new process. Neither the CLI nor the MCP binding accepts an `idempotency_key`. `idempotent` on a capability document is a semantic property of the operation, not a promise that a binding maintains a replay cache. Persistent replay is deferred.
 
 ### Crystallise the unresolved capability
 

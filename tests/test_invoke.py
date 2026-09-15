@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from agentfabric.bindings.mcp import McpBinding
 from agentfabric.fabric import Fabric
-from agentfabric.schema import validate_capability_document
 
 
 def test_semantic_loop_discover_read_transform_create_replace(fabric: Fabric) -> None:
@@ -51,126 +49,43 @@ def test_invalid_input(fabric: Fabric) -> None:
     assert result.error.code == "INVALID_INPUT"
 
 
-def test_idempotent_replay(fabric: Fabric) -> None:
-    first = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "  hello  "},
-        idempotency_key="k1",
-    )
-    second = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "  hello  "},
-        idempotency_key="k1",
-    )
-    assert first.ok and second.ok
-    assert second.output == first.output
-    assert first.output["text"] == "hello"
-
-
-def test_idempotent_replay_is_payload_bound(fabric: Fabric) -> None:
+def test_bindings_do_not_replay_on_an_idempotency_key(fabric: Fabric) -> None:
     first = fabric.invoke(
         "operator",
         "text.normalize",
         {"text": "alpha"},
         idempotency_key="same-key",
     )
-    conflict = fabric.invoke(
+    second = fabric.invoke(
         "operator",
         "text.normalize",
         {"text": "beta"},
         idempotency_key="same-key",
     )
-    assert first.ok
-    assert first.output["text"] == "alpha"
-    assert not conflict.ok
-    assert conflict.error.code == "IDEMPOTENCY_CONFLICT"
-
-
-def test_equivalent_typed_input_replays_regardless_of_key_order(fabric: Fabric) -> None:
-    first = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "hello"},
-        idempotency_key="order",
-    )
-    second = fabric.invoke(
-        "operator",
-        "text.normalize",
-        {"text": "hello"},
-        idempotency_key="order",
-    )
     assert first.ok and second.ok
-    assert second.output == first.output
+    assert first.output["text"] == "alpha"
+    assert second.output["text"] == "beta"
 
 
-def test_non_idempotent_create_ignores_key_and_repeats_the_effect(fabric: Fabric) -> None:
-    first = fabric.invoke(
-        "operator",
-        "blob.create",
-        {"label": "once.md", "text": "a"},
-        idempotency_key="create-1",
-    )
-    second = fabric.invoke(
-        "operator",
-        "blob.create",
-        {"label": "once.md", "text": "a"},
-        idempotency_key="create-1",
-    )
+def test_non_idempotent_create_repeats_the_effect(fabric: Fabric) -> None:
+    first = fabric.invoke("operator", "blob.create", {"label": "once.md", "text": "a"})
+    second = fabric.invoke("operator", "blob.create", {"label": "once.md", "text": "a"})
     assert first.ok and second.ok
     assert first.output["resource"]["ref"] != second.output["resource"]["ref"]
 
 
-def test_effectful_idempotent_retry_does_not_duplicate_side_effects(fabric: Fabric) -> None:
-    fabric.capabilities["blob.stamp"] = validate_capability_document(
+def test_mcp_invoke_does_not_forward_an_idempotency_key(fabric: Fabric) -> None:
+    binding = McpBinding(fabric, "operator")
+    result = binding.handle_tool(
+        "agentsop_invoke",
         {
-            "agentsop": "0.1",
-            "id": "blob.stamp",
-            "title": "Stamp blob",
-            "description": "Append a stamp once; retry-safe when idempotent.",
-            "input": {
-                "type": "object",
-                "properties": {
-                    "resource": {"$ref": "#/$defs/ResourceRef"},
-                    "stamp": {"type": "string"},
-                },
-                "required": ["resource", "stamp"],
-                "additionalProperties": False,
-            },
-            "output": {
-                "type": "object",
-                "properties": {
-                    "resource": {"$ref": "#/$defs/ResourceRef"},
-                    "bytes": {"type": "integer"},
-                },
-                "required": ["resource", "bytes"],
-                "additionalProperties": False,
-            },
-            "effects": ["write"],
-            "idempotent": True,
-            "authority": {"resources": ["input.resource"], "effects": ["write"]},
-            "depends_on": [],
-        }
+            "capability": "text.normalize",
+            "input": {"text": "hello"},
+            "idempotency_key": "should-not-be-a-field",
+        },
     )
-    fabric.crystallise(
-        "operator",
-        "blob.stamp",
-        """
-def resolve(ctx, input):
-    resource = input["resource"]
-    path = ctx.locator(resource["ref"])
-    path.write_text(path.read_text(encoding="utf-8") + input["stamp"], encoding="utf-8")
-    return {"resource": resource, "bytes": path.stat().st_size}
-""",
-    )
-    discovered = fabric.invoke("operator", "workspace.discover", {}).output
-    notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
-    payload = {"resource": notes, "stamp": "STAMP"}
-    first = fabric.invoke("operator", "blob.stamp", payload, idempotency_key="retry")
-    second = fabric.invoke("operator", "blob.stamp", payload, idempotency_key="retry")
-    assert first.ok and second.ok
-    assert second.output == first.output
-    text = Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8")
-    assert text.count("STAMP") == 1
+    # extra fields are ignored by handle_tool today; the MCP schema must not
+    # advertise the key. The invoke still succeeds as a fresh call.
+    assert result["ok"] is True
+    assert result["output"]["text"] == "hello"
 

@@ -36,11 +36,9 @@ def tools() -> list[dict[str, Any]]:
             "description": (
                 "Invoke an AgentSOP capability as the configured Principal. "
                 "Pass the capability id and a typed input object. ResourceRefs "
-                "must be fabric-issued handles, not locators. idempotency_key is "
-                "honoured only for this long-lived stdio process (not durable, not "
-                "CLI). Replay is bound to Principal, Capability, and typed input; "
-                "reusing a key with different input is IDEMPOTENCY_CONFLICT. "
-                "Non-idempotent capabilities ignore the key."
+                "must be fabric-issued handles, not locators. Bindings do not "
+                "accept an idempotency_key; `idempotent` on a capability is a "
+                "semantic property of the operation, not a replay cache."
             ),
             "inputSchema": {
                 "type": "object",
@@ -49,9 +47,6 @@ def tools() -> list[dict[str, Any]]:
                 "properties": {
                     "capability": {"type": "string"},
                     "input": {"type": "object"},
-                    # Honoured for this long-lived stdio process. The CLI does
-                    # not expose the same option because each command is a new process.
-                    "idempotency_key": {"type": "string"},
                 },
             },
         },
@@ -138,7 +133,6 @@ class McpBinding:
                 self.principal,
                 args["capability"],
                 args.get("input") or {},
-                idempotency_key=args.get("idempotency_key"),
             ).to_dict()
         if name == "fabric_inspect":
             self.fabric.authority.require_privilege(self.principal, "inspect")
