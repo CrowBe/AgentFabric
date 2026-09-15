@@ -11,7 +11,7 @@ import json
 import sys
 from typing import Any
 
-from agentfabric.errors import FabricError
+from agentfabric.errors import FabricError, InvalidInput
 from agentfabric.fabric import Fabric, dumps
 from agentfabric.inspect import render_snapshot
 
@@ -36,7 +36,9 @@ def tools() -> list[dict[str, Any]]:
             "description": (
                 "Invoke an AgentSOP capability as the configured Principal. "
                 "Pass the capability id and a typed input object. ResourceRefs "
-                "must be fabric-issued handles, not locators."
+                "must be fabric-issued handles, not locators. Bindings do not "
+                "accept an idempotency_key; `idempotent` on a capability is a "
+                "semantic property of the operation, not a replay cache."
             ),
             "inputSchema": {
                 "type": "object",
@@ -45,9 +47,6 @@ def tools() -> list[dict[str, Any]]:
                 "properties": {
                     "capability": {"type": "string"},
                     "input": {"type": "object"},
-                    # Honoured for this long-lived stdio process. The CLI does
-                    # not expose the same option because each command is a new process.
-                    "idempotency_key": {"type": "string"},
                 },
             },
         },
@@ -135,11 +134,17 @@ class McpBinding:
                 )
             ]
         if name == "agentsop_invoke":
+            extra = set(args) - {"capability", "input"}
+            if extra:
+                fields = ", ".join(sorted(extra))
+                message = f"unexpected fields: {fields}"
+                if "idempotency_key" in extra:
+                    message += "; idempotency_key is not accepted"
+                raise InvalidInput(message)
             return self.fabric.invoke(
                 self.principal,
                 args["capability"],
                 args.get("input") or {},
-                idempotency_key=args.get("idempotency_key"),
             ).to_dict()
         if name == "fabric_inspect":
             self.fabric.authority.require_privilege(self.principal, "inspect")

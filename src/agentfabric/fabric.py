@@ -179,9 +179,10 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
-        # Process-local only. Persistent replay is deferred until an effectful
-        # idempotent capability needs it. The CLI must not advertise this key.
-        self._idempotency: dict[str, Result] = {}
+        # Replay caches are deferred. `idempotent` on a capability document is a
+        # semantic property of the operation, not a promise that this runtime
+        # (or any current binding) maintains a key. The CLI and MCP surfaces do
+        # not accept an idempotency key.
         self._resolution = read_json(self.home / "resolution.json", {})
         self._binding_errors: dict[str, str] = {}
         self._bindings = self._load_bindings()
@@ -407,7 +408,6 @@ class Fabric:
         capability_id: str,
         input_value: dict[str, Any] | None = None,
         *,
-        idempotency_key: str | None = None,
         nested: bool = False,
     ) -> Result:
         invocation_id = new_invocation_id()
@@ -419,7 +419,6 @@ class Fabric:
                 capability_id,
                 payload,
                 invocation_id=invocation_id,
-                idempotency_key=idempotency_key,
             )
         except FabricError as exc:
             result = Result(
@@ -472,7 +471,6 @@ class Fabric:
         input_value: dict[str, Any],
         *,
         invocation_id: str,
-        idempotency_key: str | None,
     ) -> Result:
         cap = self.capability(capability_id)
         if not isinstance(input_value, dict):
@@ -489,18 +487,6 @@ class Fabric:
         for ref_dict in refs:
             ref = ResourceRef.from_dict(ref_dict)
             self.resources.require(ref)
-
-        if cap.idempotent and idempotency_key:
-            cache_key = f"{principal}:{capability_id}:{idempotency_key}"
-            cached = self._idempotency.get(cache_key)
-            if cached is not None:
-                return Result(
-                    ok=cached.ok,
-                    capability=capability_id,
-                    invocation_id=invocation_id,
-                    output=cached.output,
-                    error=cached.error,
-                )
 
         view = self.resolution_of(capability_id)
         if view.status == "unresolved":
@@ -540,8 +526,6 @@ class Fabric:
             invocation_id=invocation_id,
             output=typed_output,
         )
-        if cap.idempotent and idempotency_key:
-            self._idempotency[f"{principal}:{capability_id}:{idempotency_key}"] = result
         return result
 
     def crystallise(
