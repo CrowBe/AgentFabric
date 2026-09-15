@@ -139,7 +139,7 @@ A fresh Fabric has two principals:
 knowing a locator  ≠  possessing a ResourceRef  ≠  having authority to act on it
 ```
 
-`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE`. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF`.
+`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE` for a Principal who is granted the capability. A Principal without a matching grant receives `DENIED` for both issued and unknown well-formed refs, so ResourceRefs are not an existence oracle. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF` regardless of grants.
 
 The owner of the Fabric chooses the trust model. AgentFabric only provides the mechanism.
 
