@@ -112,6 +112,8 @@ A fabric may store an implementation locator internally. Agents are not given it
 
 Resolver **output** ResourceRefs are the same handles. A well-formed `{ "ref", "kind" }` that this fabric never issued, or whose kind does not match the registry, is invalid resolver output (`RESOLVER_ERROR`), not a successful mint.
 
+0.1 checks issuance and kind. It does **not** yet prove that this invocation may introduce that handle to the caller. A pure resolver can still return any existing ref it learns internally. The stronger rule — non-ref-introducing capabilities may only echo authorized input refs, while `discover` / `create` deliberately introduce others — is deferred.
+
 ---
 
 ## Effects
