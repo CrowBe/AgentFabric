@@ -180,6 +180,156 @@ def resolve(ctx, input):
     assert "invalid output" in result.error.message
 
 
+def test_unissued_output_ref_is_resolver_error(fabric: Fabric) -> None:
+    fabric.capabilities["test.ghost"] = validate_capability_document(
+        {
+            "agentsop": "0.1",
+            "id": "test.ghost",
+            "title": "Ghost",
+            "description": "Returns a well-formed unissued ResourceRef.",
+            "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            "output": {
+                "type": "object",
+                "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                "required": ["resource"],
+                "additionalProperties": False,
+            },
+            "effects": [],
+            "idempotent": True,
+            "authority": {"resources": [], "effects": []},
+            "depends_on": [],
+        }
+    )
+    fabric.crystallise(
+        "operator",
+        "test.ghost",
+        """
+def resolve(ctx, input):
+    return {"resource": {"ref": "rf_deadbeefdead", "kind": "blob"}}
+""",
+    )
+    result = fabric.invoke("operator", "test.ghost", {})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+    assert "invalid output" in result.error.message
+
+
+def test_output_ref_wrong_kind_is_resolver_error(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    fabric.capabilities["test.restamp"] = validate_capability_document(
+        {
+            "agentsop": "0.1",
+            "id": "test.restamp",
+            "title": "Restamp",
+            "description": "Returns an issued ref with the wrong kind.",
+            "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            "output": {
+                "type": "object",
+                "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                "required": ["resource"],
+                "additionalProperties": False,
+            },
+            "effects": [],
+            "idempotent": True,
+            "authority": {"resources": [], "effects": []},
+            "depends_on": [],
+        }
+    )
+    fabric.crystallise(
+        "operator",
+        "test.restamp",
+        f"""
+def resolve(ctx, input):
+    return {{"resource": {{"ref": "{notes["ref"]}", "kind": "journal"}}}}
+""",
+    )
+    result = fabric.invoke("operator", "test.restamp", {})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+
+
+def test_nested_and_array_output_refs_must_be_issued(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    fabric.capabilities["test.bundle"] = validate_capability_document(
+        {
+            "agentsop": "0.1",
+            "id": "test.bundle",
+            "title": "Bundle",
+            "description": "Returns nested and array ResourceRefs.",
+            "input": {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "object",
+                        "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                        "required": ["resource"],
+                        "additionalProperties": False,
+                    },
+                    "resources": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/ResourceRef"},
+                    },
+                },
+                "required": ["item", "resources"],
+                "additionalProperties": False,
+            },
+            "effects": [],
+            "idempotent": True,
+            "authority": {"resources": [], "effects": []},
+            "depends_on": [],
+        }
+    )
+    fabric.crystallise(
+        "operator",
+        "test.bundle",
+        f"""
+def resolve(ctx, input):
+    issued = {{"ref": "{notes["ref"]}", "kind": "blob"}}
+    bogus = {{"ref": "rf_deadbeefdead", "kind": "blob"}}
+    if input["ok"]:
+        return {{"item": {{"resource": issued}}, "resources": [issued]}}
+    return {{"item": {{"resource": issued}}, "resources": [issued, bogus]}}
+""",
+    )
+    ok = fabric.invoke("operator", "test.bundle", {"ok": True})
+    assert ok.ok
+    bad = fabric.invoke("operator", "test.bundle", {"ok": False})
+    assert not bad.ok
+    assert bad.error.code == "RESOLVER_ERROR"
+
+
+def test_shipped_ref_outputs_remain_issued(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {})
+    assert discovered.ok
+    journal = next(
+        item["resource"] for item in discovered.output["resources"] if item["resource"]["kind"] == "journal"
+    )
+    created = fabric.invoke("operator", "blob.create", {"label": "out.md", "text": "x"})
+    assert created.ok
+    replaced = fabric.invoke(
+        "operator", "blob.replace", {"resource": created.output["resource"], "text": "y"}
+    )
+    assert replaced.ok
+    appended = fabric.invoke(
+        "operator", "journal.append", {"resource": journal, "entry": "hello"}
+    )
+    assert appended.ok
+
+
 def test_unsupported_schema_type_rejected_at_load() -> None:
     doc = _minimal_capability()
     doc["input"]["properties"]["n"] = {"type": "number"}
