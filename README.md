@@ -101,7 +101,7 @@ Project MCP config lives in [`.cursor/mcp.json`](.cursor/mcp.json). Tools:
 
 | Tool | What it is |
 | --- | --- |
-| `agentsop_list` / `agentsop_invoke` | Semantic catalogue and invocation |
+| `agentsop_list` / `agentsop_invoke` | Semantic catalogue (full public contract: input, output, effects, authority, dependencies, idempotency, plus resolution status) and invocation |
 | `fabric_inspect` / `fabric_crystallise` | Control plane (privileged) |
 | `fallback_exec` | **Not** AgentSOP. Broader execution for novel work the Fabric does not yet name. |
 
