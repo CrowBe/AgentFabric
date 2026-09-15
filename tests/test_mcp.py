@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from typing import Any
 
 from agentfabric.bindings.mcp import McpBinding, serve, tools
 from agentfabric.demo import WORD_COUNT_SOURCE
@@ -182,3 +183,42 @@ def test_handle_tool_rejects_non_object_arguments(fabric: Fabric) -> None:
         assert "AttributeError" not in str(exc)
     else:
         raise AssertionError("non-object arguments must fail")
+
+
+def test_mcp_invalid_idless_object_is_invalid_request(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {},
+        {"jsonrpc": "2.0", "id": 12, "method": "ping"},
+    )
+    assert lines[0]["id"] is None
+    assert lines[0]["error"]["code"] == -32600
+    assert lines[1]["id"] == 12
+    assert lines[1]["result"] == {}
+
+
+def _frame(message: dict[str, Any]) -> bytes:
+    body = json.dumps(message, ensure_ascii=False).encode("utf-8")
+    return f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+
+
+def _parse_framed(raw: bytes) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    buf = raw
+    while buf:
+        header, rest = buf.split(b"\r\n\r\n", 1)
+        length = int(header.decode("ascii").split(":", 1)[1].strip())
+        body, buf = rest[:length], rest[length:]
+        messages.append(json.loads(body.decode("utf-8")))
+    return messages
+
+
+def test_mcp_framed_multibyte_does_not_desync(fabric: Fabric) -> None:
+    first = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"note": "café"}}
+    second = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+    stdin = io.BytesIO(_frame(first) + _frame(second))
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert [item["id"] for item in messages] == [1, 2]
+    assert all(item["result"] == {} for item in messages)

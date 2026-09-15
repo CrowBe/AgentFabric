@@ -211,17 +211,65 @@ def _error_result(message: str) -> dict[str, Any]:
     }
 
 
+def _decode_line(raw: Any) -> str:
+    if raw == "" or raw == b"":
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8")
+    return str(raw)
+
+
+def _read_framed_body(stdin, length: int) -> str:
+    """Read Content-Length bytes, not characters."""
+    buffer = getattr(stdin, "buffer", None)
+    if buffer is not None:
+        data = buffer.read(length)
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        if len(data) != length:
+            raise ValueError("truncated framed body")
+        return bytes(data).decode("utf-8")
+    sample = stdin.read(0)
+    if isinstance(sample, (bytes, bytearray)):
+        data = stdin.read(length)
+        if len(data) != length:
+            raise ValueError("truncated framed body")
+        return bytes(data).decode("utf-8")
+    collected = bytearray()
+    while len(collected) < length:
+        ch = stdin.read(1)
+        if ch == "" or ch == b"":
+            raise ValueError("truncated framed body")
+        collected.extend(ch.encode("utf-8") if isinstance(ch, str) else ch)
+    if len(collected) != length:
+        raise ValueError("framed body is not valid UTF-8 at Content-Length boundary")
+    return collected.decode("utf-8")
+
+
+def _write_bytes(stdout, data: bytes) -> None:
+    buffer = getattr(stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(data)
+        buffer.flush()
+        return
+    try:
+        stdout.write(data)
+    except TypeError:
+        stdout.write(data.decode("utf-8"))
+    stdout.flush()
+
+
 def read_message(stdin) -> dict[str, Any] | None:
-    first = stdin.readline()
+    first = _decode_line(stdin.readline())
     if first == "":
         return None
     if first.lower().startswith("content-length:"):
         length = int(first.split(":", 1)[1].strip())
         while True:
-            line = stdin.readline()
+            line = _decode_line(stdin.readline())
             if line in ("", "\n", "\r\n"):
                 break
-        body = stdin.read(length)
+        body = _read_framed_body(stdin, length)
         return json.loads(body)
     line = first.strip()
     if not line:
@@ -231,13 +279,11 @@ def read_message(stdin) -> dict[str, Any] | None:
 
 def write_message(stdout, message: dict[str, Any], *, framed: bool) -> None:
     body = json.dumps(message, ensure_ascii=False)
+    encoded = body.encode("utf-8")
     if framed:
-        encoded = body.encode("utf-8")
-        stdout.write(f"Content-Length: {len(encoded)}\r\n\r\n")
-        stdout.write(body)
+        _write_bytes(stdout, f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii") + encoded)
     else:
-        stdout.write(body + "\n")
-    stdout.flush()
+        _write_bytes(stdout, encoded + b"\n")
 
 
 JSONRPC_PARSE_ERROR = -32700
@@ -265,18 +311,21 @@ def handle_jsonrpc(binding: McpBinding, request: Any) -> dict[str, Any] | None:
         return _rpc_error(None, JSONRPC_INVALID_REQUEST, "batch requests are not supported")
     if not isinstance(request, dict):
         return _rpc_error(None, JSONRPC_INVALID_REQUEST, "request must be a JSON object")
-    notification = "id" not in request
-    req_id = request.get("id") if not notification else None
+
+    jsonrpc = request.get("jsonrpc")
+    method = request.get("method")
+    has_id = "id" in request
+    req_id = request.get("id") if has_id else None
+    valid_envelope = jsonrpc == "2.0" and isinstance(method, str) and bool(method)
+    if not valid_envelope:
+        return _rpc_error(req_id, JSONRPC_INVALID_REQUEST, "invalid request")
+    notification = not has_id
 
     def reply(message: dict[str, Any] | None) -> dict[str, Any] | None:
         if notification:
             return None
         return message
 
-    jsonrpc = request.get("jsonrpc")
-    method = request.get("method")
-    if jsonrpc != "2.0" or not isinstance(method, str) or not method:
-        return reply(_rpc_error(req_id, JSONRPC_INVALID_REQUEST, "invalid request"))
     params = request.get("params", {})
     if params is None:
         params = {}
@@ -343,8 +392,8 @@ def handle_jsonrpc(binding: McpBinding, request: Any) -> dict[str, Any] | None:
 
 def serve(fabric: Fabric, principal: str, stdin=None, stdout=None) -> None:
     binding = McpBinding(fabric, principal)
-    stdin = stdin if stdin is not None else sys.stdin
-    stdout = stdout if stdout is not None else sys.stdout
+    stdin = stdin if stdin is not None else sys.stdin.buffer
+    stdout = stdout if stdout is not None else sys.stdout.buffer
     framed = False
 
     def reply(message: dict[str, Any]) -> None:
@@ -352,7 +401,7 @@ def serve(fabric: Fabric, principal: str, stdin=None, stdout=None) -> None:
 
     while True:
         try:
-            peek = stdin.readline()
+            peek = _decode_line(stdin.readline())
             if peek == "":
                 return
             if peek.lower().startswith("content-length:"):
@@ -363,10 +412,10 @@ def serve(fabric: Fabric, principal: str, stdin=None, stdout=None) -> None:
                     reply(_rpc_error(None, JSONRPC_PARSE_ERROR, "parse error"))
                     continue
                 while True:
-                    line = stdin.readline()
+                    line = _decode_line(stdin.readline())
                     if line in ("", "\n", "\r\n"):
                         break
-                request = json.loads(stdin.read(length))
+                request = json.loads(_read_framed_body(stdin, length))
             else:
                 line = peek.strip()
                 if not line:
