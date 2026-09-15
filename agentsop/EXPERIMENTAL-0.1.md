@@ -159,6 +159,8 @@ Every invocation yields one Result:
 
 These codes are part of the contract. Messages are not.
 
+Invocation audit (who invoked what) is fabric observability, not part of the Result. Once resolver output is validated and the effect has completed, a failure to persist an audit record must not replace or erase that Result. Owner inspection may show degraded audit health.
+
 ---
 
 ## Resolution and crystallisation
