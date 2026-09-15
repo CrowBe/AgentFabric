@@ -90,7 +90,7 @@ Do not give agents locators. Do not accept locators in capability input.
 
 `operator` has `capability=*`. New capabilities are available to the operator immediately.
 
-`guest` is allowlisted per capability. Do not grant `guest` create, replace, append, crystallise, or fallback unless the owner of this Fabric says so.
+`guest` is allowlisted per capability. Do not grant `guest` create, replace, append, inspect, crystallise, or fallback unless the owner of this Fabric says so.
 
 ### Tests
 

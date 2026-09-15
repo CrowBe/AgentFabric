@@ -192,6 +192,8 @@ future invocations use the name, not the implementation
 
 AgentSOP does not say who is allowed to register a resolver. That is a fabric trust policy.
 
+Invocation audit records (typed input and output previews) are **protected data**. They are not Capability output. A fabric may expose them only to a control-plane Principal; they must not be a side channel around capability/resource grants. Agent-safe discovery of the catalogue is listing capabilities, not reading another Principal's invocations.
+
 ---
 
 ## Composition
