@@ -9,7 +9,12 @@ from agentfabric.cli import main
 from agentfabric.fabric import Fabric
 from agentfabric.scaffold import scaffold
 from agentfabric.schema import validate_capability_document
-from agentfabric.sync import parse_ownership_leaks, read_origin, sync_fabric
+from agentfabric.sync import (
+    parse_ownership_leaks,
+    read_origin,
+    repo_owned_includes,
+    sync_fabric,
+)
 from agentfabric.types import Capability
 
 
@@ -296,6 +301,37 @@ def test_ownership_leak_parser_treats_tracked_repo_as_upstream() -> None:
         "tests/test_sync.py",
         "AGENTS.md",
         ".agents/skills/agentfabric/sync-upstream/SKILL.md",
+    }
+
+
+def test_ownership_manifest_limits_untracked_feedback(tmp_path: Path) -> None:
+    (tmp_path / ".agentfabric-sync.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repo_owned": {"include": ["src/**", "*.md"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    porcelain = "\n".join(
+        [
+            " M tracked-anywhere.bin",
+            "?? src/agentfabric/new_module.py",
+            "?? DESIGN.md",
+            "?? .codex/config.toml",
+        ]
+    )
+
+    leaks = parse_ownership_leaks(
+        porcelain,
+        untracked_includes=repo_owned_includes(tmp_path),
+    )
+
+    assert {item["path"] for item in leaks} == {
+        "tracked-anywhere.bin",
+        "src/agentfabric/new_module.py",
+        "DESIGN.md",
     }
 
 

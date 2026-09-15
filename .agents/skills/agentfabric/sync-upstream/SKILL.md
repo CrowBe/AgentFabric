@@ -20,15 +20,20 @@ tests, packaging, and config are shipped too. Git updates that checkout;
 
 ## Steps
 
-1. Inspect the git working tree. Any dirty path outside `.fabric/` is an
-   ownership leak, not a merge to finish — including `.agents/`, `AGENTS.md`,
-   README/docs, tests, and packaging, not only `agentsop/` or `src/`.
-   Move machine-specific documents into `.fabric/capabilities/` and resolvers
-   into `.fabric/resolvers/` before updating git.
-2. Update the git-tracked project only once the checkout is clean of
-   Fabric-local edits: `git pull` / merge of upstream. Do not run a merge
-   tool just to get a clean index if the conflict is a local capability vs a
-   shipped one.
+1. Run `git status --short --branch`, then
+   `python3 -m agentfabric sync --check`. The repo-owned path patterns in
+   [`.agentfabric-sync.json`](../../../../.agentfabric-sync.json) classify
+   untracked paths; tracked paths are already repo-owned. Resolve every item
+   under **Ownership feedback** before syncing. Commit deliberate upstream
+   contributions. Move machine-specific capabilities and resolvers into their
+   `.fabric/` directories. Local harness state outside the include patterns may
+   remain untracked.
+2. Fetch `main` only after the checkout is clean: `git fetch origin main`.
+   On `main`, fast-forward with `git merge --ff-only origin/main`. On a feature
+   branch, integrate `origin/main` using the repository's delivery policy.
+   Finish when `git merge-base --is-ancestor origin/main HEAD` succeeds. A Git
+   content conflict and an AgentFabric catalogue conflict are separate: do not
+   use a merge strategy to dismiss the latter.
 3. Reinstall if the runtime changed: `python3 -m pip install -e '.[dev]'`.
 4. `python3 -m agentfabric sync` (or `--check` first). Read the report.
    Unresolved conflicts must still be present if you run sync again.
