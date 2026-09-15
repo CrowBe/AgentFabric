@@ -11,7 +11,7 @@ import json
 import sys
 from typing import Any
 
-from agentfabric.errors import FabricError
+from agentfabric.errors import FabricError, InvalidInput
 from agentfabric.fabric import Fabric, dumps
 from agentfabric.inspect import render_snapshot
 
@@ -129,6 +129,13 @@ class McpBinding:
                 )
             ]
         if name == "agentsop_invoke":
+            extra = set(args) - {"capability", "input"}
+            if extra:
+                fields = ", ".join(sorted(extra))
+                message = f"unexpected fields: {fields}"
+                if "idempotency_key" in extra:
+                    message += "; idempotency_key is not accepted"
+                raise InvalidInput(message)
             return self.fabric.invoke(
                 self.principal,
                 args["capability"],

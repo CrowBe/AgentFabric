@@ -406,7 +406,6 @@ class Fabric:
         capability_id: str,
         input_value: dict[str, Any] | None = None,
         *,
-        idempotency_key: str | None = None,
         nested: bool = False,
     ) -> Result:
         invocation_id = new_invocation_id()
@@ -418,7 +417,6 @@ class Fabric:
                 capability_id,
                 payload,
                 invocation_id=invocation_id,
-                idempotency_key=idempotency_key,
             )
         except FabricError as exc:
             result = Result(
@@ -465,9 +463,7 @@ class Fabric:
         input_value: dict[str, Any],
         *,
         invocation_id: str,
-        idempotency_key: str | None,
     ) -> Result:
-        del idempotency_key  # no binding currently offers replay
         cap = self.capability(capability_id)
         if not isinstance(input_value, dict):
             raise InvalidInput("input must be an object")
