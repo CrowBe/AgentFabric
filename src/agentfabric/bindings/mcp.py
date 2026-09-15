@@ -219,6 +219,23 @@ def _decode_line(raw: Any) -> str:
     return str(raw)
 
 
+MAX_FRAMED_BODY_BYTES = 1_048_576
+
+
+def _framed_content_length(header: str) -> int:
+    length = int(header.split(":", 1)[1].strip())
+    if length < 0 or length > MAX_FRAMED_BODY_BYTES:
+        raise ValueError("invalid Content-Length")
+    return length
+
+
+def _skip_framed_headers(stdin) -> None:
+    while True:
+        line = _decode_line(stdin.readline())
+        if line in ("", "\n", "\r\n"):
+            return
+
+
 def _read_framed_body(stdin, length: int) -> str:
     """Read Content-Length bytes, not characters."""
     buffer = getattr(stdin, "buffer", None)
@@ -264,11 +281,8 @@ def read_message(stdin) -> dict[str, Any] | None:
     if first == "":
         return None
     if first.lower().startswith("content-length:"):
-        length = int(first.split(":", 1)[1].strip())
-        while True:
-            line = _decode_line(stdin.readline())
-            if line in ("", "\n", "\r\n"):
-                break
+        length = _framed_content_length(first)
+        _skip_framed_headers(stdin)
         body = _read_framed_body(stdin, length)
         return json.loads(body)
     line = first.strip()
@@ -407,14 +421,12 @@ def serve(fabric: Fabric, principal: str, stdin=None, stdout=None) -> None:
             if peek.lower().startswith("content-length:"):
                 framed = True
                 try:
-                    length = int(peek.split(":", 1)[1].strip())
+                    length = _framed_content_length(peek)
                 except ValueError:
+                    _skip_framed_headers(stdin)
                     reply(_rpc_error(None, JSONRPC_PARSE_ERROR, "parse error"))
                     continue
-                while True:
-                    line = _decode_line(stdin.readline())
-                    if line in ("", "\n", "\r\n"):
-                        break
+                _skip_framed_headers(stdin)
                 request = json.loads(_read_framed_body(stdin, length))
             else:
                 line = peek.strip()

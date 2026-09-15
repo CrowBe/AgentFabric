@@ -222,3 +222,14 @@ def test_mcp_framed_multibyte_does_not_desync(fabric: Fabric) -> None:
     messages = _parse_framed(stdout.getvalue())
     assert [item["id"] for item in messages] == [1, 2]
     assert all(item["result"] == {} for item in messages)
+
+
+def test_mcp_negative_content_length_then_recovers(fabric: Fabric) -> None:
+    ping = _frame({"jsonrpc": "2.0", "id": 13, "method": "ping"})
+    stdin = io.BytesIO(b"Content-Length: -1\r\n\r\n" + ping)
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert messages[0]["error"]["code"] == -32700
+    assert messages[1]["id"] == 13
+    assert messages[1]["result"] == {}
