@@ -88,7 +88,7 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
 - **`authority.resources`** — top-level input fields that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
 
-  0.1 supports only a top-level scalar selector: `input.` plus the literal input property name (`input.resource`, `input.resource-ref`). The suffix is that JSON key, not an identifier-language token. Catalogue validation rejects selectors that target nested objects or collections (`input.wrapper.resource`, `input.resources.*`). JSON Pointer, wildcards, and batch authorization are a later contract revision, driven by a real capability.
+  0.1 supports only a top-level scalar selector: `input.` plus a property name that does **not** contain `.` (`input.resource`, `input.resource-ref`). Hyphens are fine; `.` is reserved, and 0.1 has no escaping syntax to name a key such as `resource.ref`. Catalogue validation rejects nested/collection selectors (`input.wrapper.resource`, `input.resources.*`) and ResourceRef properties whose names contain `.`. JSON Pointer, wildcards, and batch authorization are a later contract revision, driven by a real capability.
 
   The live input schema is checked at catalogue load: every selector MUST name a top-level property whose schema is `$ref: #/$defs/ResourceRef`. A document that points at an array, a nested object, or an unrelated field is rejected rather than loading with inexecutable authority.
 

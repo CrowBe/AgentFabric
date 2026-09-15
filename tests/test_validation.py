@@ -319,6 +319,32 @@ def test_collection_selector_is_rejected_at_load() -> None:
         validate_capability_document(starred)
 
 
+def test_dotted_resource_ref_property_is_rejected_at_load() -> None:
+    dotted = _minimal_capability(
+        id="blob.dotted",
+        input={
+            "type": "object",
+            "properties": {"resource.ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource.ref"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.resource.ref"], "effects": []},
+    )
+    with pytest.raises(InvalidInput, match="dotted"):
+        validate_capability_document(dotted)
+    unnamed = _minimal_capability(
+        id="blob.dotted",
+        input={
+            "type": "object",
+            "properties": {"resource.ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource.ref"],
+            "additionalProperties": False,
+        },
+    )
+    with pytest.raises(InvalidInput, match="dotted"):
+        validate_capability_document(unnamed)
+
+
 def test_nested_selector_is_rejected_at_load() -> None:
     nested = _minimal_capability(
         id="blob.wrapped",

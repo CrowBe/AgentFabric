@@ -179,6 +179,7 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
         raise InvalidInput(f"capability has unexpected fields: {sorted(extra)}")
     assert_supported_schema(doc["input"], path="input")
     assert_supported_schema(doc["output"], path="output")
+    _assert_authority_target_names(doc["input"])
     for pointer in authority["resources"]:
         assert_authority_selector(pointer, doc["input"])
     return Capability(
@@ -200,7 +201,7 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
 
 
 def parse_authority_selector(pointer: str) -> str:
-    """0.1: only a top-level field, e.g. input.resource or input.resource-ref."""
+    """0.1: `input.` plus a top-level property name that does not contain '.'."""
     if not isinstance(pointer, str) or not pointer.startswith("input."):
         raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
     rest = pointer[len("input.") :]
@@ -210,6 +211,23 @@ def parse_authority_selector(pointer: str) -> str:
             "nested objects and collections are not supported in 0.1"
         )
     return rest
+
+
+def _assert_authority_target_names(input_schema: dict[str, Any]) -> None:
+    """ResourceRef fields that 0.1 cannot name in authority.resources are rejected."""
+    if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+        return
+    props = input_schema.get("properties")
+    if not isinstance(props, dict):
+        return
+    for key, target in props.items():
+        if not isinstance(key, str) or "." not in key:
+            continue
+        if isinstance(target, dict) and target.get("$ref") == RESOURCE_REF_DEF:
+            raise InvalidInput(
+                f"input property {key!r} contains '.'; 0.1 cannot target dotted "
+                "names in authority.resources (no escaping syntax)"
+            )
 
 
 def assert_authority_selector(pointer: str, input_schema: dict[str, Any]) -> None:
