@@ -3,9 +3,12 @@ from __future__ import annotations
 import io
 import json
 
+from pathlib import Path
+
 from agentfabric.bindings.mcp import McpBinding, serve, tools
 from agentfabric.demo import WORD_COUNT_SOURCE
 from agentfabric.fabric import Fabric, dumps
+from agentfabric.store import write_json
 
 
 def test_mcp_tool_surface_is_not_agentsop() -> None:
@@ -91,6 +94,37 @@ def test_agentsop_list_does_not_expose_resolver_source(fabric: Fabric) -> None:
     assert read["resolver"] == "builtin:blob.read"
     assert "src/" not in dumps(read)
     assert ".py" not in (read["resolver"] or "")
+    assert "detail" not in read
+
+
+def test_agentsop_list_omits_absolute_resolver_path_detail(fabric: Fabric, tmp_path: Path) -> None:
+    external = tmp_path / "outside" / "broken_resolver.py"
+    external.parent.mkdir()
+    external.write_text("this is not valid python :\n", encoding="utf-8")
+    write_json(
+        fabric.home / "resolution.json",
+        {
+            "text.word_count": {
+                "kind": "local_python",
+                "path": str(external),
+                "crystallised_by": "operator",
+            }
+        },
+    )
+    reloaded = Fabric(fabric.home)
+    view = reloaded.resolution_of("text.word_count")
+    assert view.status == "unavailable"
+    assert view.detail is not None
+    assert str(external) in view.detail
+
+    listed = {item["id"]: item for item in McpBinding(reloaded, "operator").handle_tool("agentsop_list", {})}
+    row = listed["text.word_count"]
+    blob = dumps(row)
+    assert row["status"] == "unavailable"
+    assert "detail" not in row
+    assert str(external) not in blob
+    assert "outside" not in blob
+    assert "broken_resolver.py" not in blob
 
 
 def test_mcp_stdio_initialize_and_list(fabric: Fabric) -> None:

@@ -150,8 +150,9 @@ class McpBinding:
 def _public_capability(fabric: Fabric, cap_id: str) -> dict[str, Any]:
     """Public catalogue row: contract fields plus live resolution metadata.
 
-    Aligned with Capability.to_public_dict() plus runtime status. Resolver
-    labels are included; source paths and other locators are not.
+    Aligned with Capability.to_public_dict() plus live resolution status.
+    Resolver labels are included; source paths, load diagnostics, and other
+    locators are not. Privileged `fabric_inspect` still surfaces `detail`.
     """
     cap = fabric.capability(cap_id)
     view = fabric.resolution_of(cap_id)
@@ -161,7 +162,6 @@ def _public_capability(fabric: Fabric, cap_id: str) -> dict[str, Any]:
             "status": view.status,
             "resolver": view.resolver,
             "origin": view.origin,
-            "detail": view.detail,
         }
     )
     return public
