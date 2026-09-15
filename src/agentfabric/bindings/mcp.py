@@ -36,7 +36,11 @@ def tools() -> list[dict[str, Any]]:
             "description": (
                 "Invoke an AgentSOP capability as the configured Principal. "
                 "Pass the capability id and a typed input object. ResourceRefs "
-                "must be fabric-issued handles, not locators."
+                "must be fabric-issued handles, not locators. idempotency_key is "
+                "honoured only for this long-lived stdio process (not durable, not "
+                "CLI). Replay is bound to Principal, Capability, and typed input; "
+                "reusing a key with different input is IDEMPOTENCY_CONFLICT. "
+                "Non-idempotent capabilities ignore the key."
             ),
             "inputSchema": {
                 "type": "object",

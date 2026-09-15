@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from agentfabric.catalogue import (
 from agentfabric.errors import (
     DependencyFailed,
     FabricError,
+    IdempotencyConflict,
     InvalidInput,
     InvalidRef,
     ResolverError,
@@ -177,9 +179,10 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
-        # Process-local only. Persistent replay is deferred until an effectful
-        # idempotent capability needs it. The CLI must not advertise this key.
-        self._idempotency: dict[str, Result] = {}
+        # Process-local only. Persistent replay is deferred until a binding
+        # offers durable storage. Keys are bound to Principal, Capability, and
+        # a digest of typed input; a reused key with different input conflicts.
+        self._idempotency: dict[str, tuple[str, Result]] = {}
         self._resolution = read_json(self.home / "resolution.json", {})
         self._binding_errors: dict[str, str] = {}
         self._bindings = self._load_bindings()
@@ -480,15 +483,22 @@ class Fabric:
             self.authority.allow(principal, capability_id, resource_key, effects)
 
         if cap.idempotent and idempotency_key:
+            digest = _typed_input_digest(typed_input)
             cache_key = f"{principal}:{capability_id}:{idempotency_key}"
             cached = self._idempotency.get(cache_key)
             if cached is not None:
+                cached_digest, cached_result = cached
+                if cached_digest != digest:
+                    raise IdempotencyConflict(
+                        f"idempotency key {idempotency_key!r} was already used for "
+                        f"{capability_id} with different typed input"
+                    )
                 return Result(
-                    ok=cached.ok,
+                    ok=cached_result.ok,
                     capability=capability_id,
                     invocation_id=invocation_id,
-                    output=cached.output,
-                    error=cached.error,
+                    output=cached_result.output,
+                    error=cached_result.error,
                 )
 
         view = self.resolution_of(capability_id)
@@ -530,7 +540,10 @@ class Fabric:
             output=typed_output,
         )
         if cap.idempotent and idempotency_key:
-            self._idempotency[f"{principal}:{capability_id}:{idempotency_key}"] = result
+            self._idempotency[f"{principal}:{capability_id}:{idempotency_key}"] = (
+                _typed_input_digest(typed_input),
+                result,
+            )
         return result
 
     def crystallise(
@@ -692,3 +705,8 @@ def default_home() -> Path:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def _typed_input_digest(typed_input: dict[str, Any]) -> str:
+    canonical = json.dumps(typed_input, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

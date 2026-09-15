@@ -56,3 +56,7 @@ class UndeclaredDependency(FabricError):
 
 class ResolverError(FabricError):
     code = "RESOLVER_ERROR"
+
+
+class IdempotencyConflict(FabricError):
+    code = "IDEMPOTENCY_CONFLICT"

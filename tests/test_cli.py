@@ -35,3 +35,6 @@ def test_cli_rejects_idempotency_key(capsys: pytest.CaptureFixture[str]) -> None
 def test_mcp_invoke_still_accepts_idempotency_key() -> None:
     invoke = next(tool for tool in tools() if tool["name"] == "agentsop_invoke")
     assert "idempotency_key" in invoke["inputSchema"]["properties"]
+    description = invoke["description"].lower()
+    assert "process" in description
+    assert "idempotency_conflict" in description
