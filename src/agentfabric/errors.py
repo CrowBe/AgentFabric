@@ -22,6 +22,14 @@ class Unresolved(FabricError):
     code = "UNRESOLVED"
 
 
+class ResolverUnavailable(FabricError):
+    code = "RESOLVER_UNAVAILABLE"
+
+
+class DependencyBlocked(FabricError):
+    code = "DEPENDENCY_BLOCKED"
+
+
 class Denied(FabricError):
     code = "DENIED"
 

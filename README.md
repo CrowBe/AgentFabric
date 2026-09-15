@@ -132,8 +132,8 @@ Composition reuses resolvers. Nested invokes are limited to the parent capabilit
 
 A fresh Fabric has two principals:
 
-- **`operator`** — all capabilities, plus privileges `inspect`, `crystallise`, `fallback`
-- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot create, replace, append, crystallise, or use the fallback.
+- **`operator`** — all capabilities, plus privileges `inspect`, `crystallise`, `fallback`. `inspect` here is control-plane: recent invocation payloads are included.
+- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot create, replace, append, inspect, crystallise, or use the fallback. Catalogue discovery uses `agentsop_list`, which does not include audit payloads.
 
 ```
 knowing a locator  ≠  possessing a ResourceRef  ≠  having authority to act on it
@@ -151,9 +151,14 @@ The owner of the Fabric chooses the trust model. AgentFabric only provides the m
 agentfabric inspect
 ```
 
+The CLI inspect command is **owner/control-plane**. It runs locally against the Fabric home and includes recent invocation input/output previews. That is distinct from agent-safe discovery (`agentsop_list` / `agentsop_invoke`), which never returns another Principal's payloads.
+
+`fabric_inspect` on MCP requires the `inspect` privilege. The default guest does not have it. If inspect is granted without `crystallise`, the JSON snapshot still redacts other principals' `input` and `output_preview`. Audit payloads are protected data; capability status remains visible.
+
 answers:
 
-- What capabilities exist, and which are resolvable, unresolved, or unavailable?
+- What capabilities exist, and which are resolvable, unresolved, unavailable, or blocked?
+- Invocation failures use the matching stable code: `UNRESOLVED`, `RESOLVER_UNAVAILABLE`, or `DEPENDENCY_BLOCKED`.
 - Which resolver backs each one? A missing or broken local resolver degrades that capability instead of failing inspect.
 - Which principals exist, and what has been granted?
 - Which resources are known (as refs and labels, not locators)?

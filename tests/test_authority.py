@@ -212,3 +212,20 @@ def test_authorized_caller_keeps_unknown_and_kind_diagnostics(fabric: Fabric) ->
     assert not mismatch.ok
     assert mismatch.error.code == "KIND_MISMATCH"
 
+
+def test_read_only_grant_cannot_authorize_write_capability(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output
+    notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
+    fabric.add_principal("reader")
+    fabric.authority.add(
+        principal="reader",
+        capability="blob.replace",
+        resource="*",
+        effects=["read"],
+    )
+    original = Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8")
+    denied = fabric.invoke("reader", "blob.replace", {"resource": notes, "text": "nope"})
+    assert not denied.ok
+    assert denied.error.code == "DENIED"
+    assert Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8") == original
+
