@@ -179,6 +179,7 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
+        self._audit_health: dict[str, Any] = {"ok": True, "error": None}
         # Replay caches are deferred. `idempotent` on a capability document is a
         # semantic property of the operation, not a promise that this runtime
         # (or any current binding) maintains a key. The CLI and MCP surfaces do
@@ -428,7 +429,7 @@ class Fabric:
                 error=ErrorBody(code=exc.code, message=exc.message),
             )
         duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        self.audit.record(
+        self._record_audit(
             InvocationRecord(
                 id=invocation_id,
                 ts=utc_now(),
@@ -601,7 +602,7 @@ class Fabric:
             ),
             duration_ms=0,
         )
-        self.audit.record(record)
+        self._record_audit(record)
         from agentfabric.notice import record as record_opportunity
 
         record_opportunity(
@@ -621,6 +622,27 @@ class Fabric:
             "agentsop": None,
             "note": "fallback.exec is a harness escape hatch, not an AgentSOP capability",
         }
+
+    def _record_audit(self, record: InvocationRecord) -> None:
+        """Best-effort observability. Must not replace a determined Result."""
+        try:
+            self.audit.record(record)
+        except Exception as exc:
+            self._note_audit_failure(exc)
+            return
+        self._audit_health = {"ok": True, "error": None}
+
+    def _note_audit_failure(self, exc: BaseException) -> None:
+        import sys
+
+        self._audit_health = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        sys.stderr.write(
+            "agentfabric: audit recording failed; invocation Result is unchanged: "
+            f"{exc}\n"
+        )
 
     def snapshot(self, *, viewer: str | None = None) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
@@ -674,6 +696,7 @@ class Fabric:
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
             "invocations": invocations,
+            "audit": dict(self._audit_health),
             "opportunities": open_opportunities(self.home, resolved=resolved),
         }
 
