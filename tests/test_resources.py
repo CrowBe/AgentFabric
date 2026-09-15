@@ -155,6 +155,34 @@ def test_delete_is_ref_scoped_and_immediately_unknown(fabric: Fabric) -> None:
     assert again.error.code == "UNKNOWN_RESOURCE"
 
 
+def test_delete_save_failure_does_not_commit(fabric: Fabric, monkeypatch) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "still-here.md", "text": "keep"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    assert locator.is_file()
+
+    def boom() -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fabric.resources, "_save", boom)
+    result = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+    assert locator.is_file()
+    assert fabric.resources.get(created["ref"]).kind == "blob"
+
+    monkeypatch.undo()
+    reloaded = Fabric(fabric.home)
+    assert Path(reloaded.resources.get(created["ref"]).locator).is_file()
+    deleted = reloaded.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output == {"deleted": True}
+    assert not locator.exists()
+
+
 def test_delete_rejects_journal_kind(fabric: Fabric) -> None:
     journal = _resource_by_label(fabric, "journal.md")
     result = fabric.invoke("operator", "blob.delete", {"resource": journal})

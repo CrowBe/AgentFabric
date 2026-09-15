@@ -116,9 +116,16 @@ class ResourceRegistry:
     def delete(self, resource: ResourceRef, *kinds: str) -> ResourceRecord:
         record = self.require(resource, *kinds)
         path = self.locator_path(record)
-        path.unlink(missing_ok=True)
         del self._records[record.ref]
-        self._save()
+        try:
+            self._save()
+        except Exception:
+            self._records[record.ref] = record
+            raise
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
         return record
 
 
