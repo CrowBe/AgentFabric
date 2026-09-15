@@ -26,8 +26,11 @@ def tools() -> list[dict[str, Any]]:
             "name": "agentsop_list",
             "description": (
                 "List AgentSOP capabilities known to this Fabric, including "
-                "whether each is currently resolvable. This is a binding-level "
-                "discovery tool, not itself an AgentSOP capability."
+                "each public contract (input, output, effects, authority, "
+                "dependencies, idempotency) and whether it is currently "
+                "resolvable. This is a binding-level discovery tool, not "
+                "itself an AgentSOP capability. It does not expose resolver "
+                "source or implementation locators."
             ),
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
@@ -116,22 +119,8 @@ class McpBinding:
         args = arguments or {}
         if name == "agentsop_list":
             return [
-                {
-                    "id": view.id,
-                    "title": view.title,
-                    "description": view.description,
-                    "effects": view.effects,
-                    "status": view.status,
-                    "resolver": view.resolver,
-                    "origin": view.origin,
-                    "depends_on": view.depends_on,
-                    "idempotent": view.idempotent,
-                    "detail": view.detail,
-                }
-                for view in (
-                    self.fabric.resolution_of(cap_id)
-                    for cap_id in sorted(self.fabric.capabilities)
-                )
+                _public_capability(self.fabric, cap_id)
+                for cap_id in sorted(self.fabric.capabilities)
             ]
         if name == "agentsop_invoke":
             extra = set(args) - {"capability", "input"}
@@ -166,6 +155,26 @@ class McpBinding:
                 timeout=float(args.get("timeout") or 15),
             )
         raise FabricError(f"unknown tool {name}", code="UNKNOWN_TOOL")
+
+
+def _public_capability(fabric: Fabric, cap_id: str) -> dict[str, Any]:
+    """Public catalogue row: contract fields plus live resolution metadata.
+
+    Aligned with Capability.to_public_dict() plus live resolution status.
+    Resolver labels are included; source paths, load diagnostics, and other
+    locators are not. Privileged `fabric_inspect` still surfaces `detail`.
+    """
+    cap = fabric.capability(cap_id)
+    view = fabric.resolution_of(cap_id)
+    public = cap.to_public_dict()
+    public.update(
+        {
+            "status": view.status,
+            "resolver": view.resolver,
+            "origin": view.origin,
+        }
+    )
+    return public
 
 
 def _text_result(value: Any) -> dict[str, Any]:
