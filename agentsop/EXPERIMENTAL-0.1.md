@@ -31,7 +31,7 @@ resolver              →  disposable
 | **Resource** | A thing in the environment that an operation may act on. |
 | **ResourceRef** | An opaque, fabric-managed handle to a Resource. Not a path, URL, or bearer token. |
 | **Principal** | An identity that may be granted authority. |
-| **Effect** | A declared consequence of invocation (`discover`, `read`, `create`, `write`, `append`). |
+| **Effect** | A declared consequence of invocation (`discover`, `read`, `create`, `write`, `append`, `delete`). |
 | **Grant** | Authority for a Principal to invoke a Capability, optionally limited to Resources and Effects. |
 | **Resolution** | Binding a Capability to a Resolver. A capability may exist and still be unresolved. |
 | **Resolver** | Trusted implementation that satisfies a Capability. |
@@ -134,7 +134,7 @@ Resolver **output** ResourceRefs are the same handles. A well-formed `{ "ref", "
 
 ## Effects
 
-0.1 defines five effects. The vocabulary is **closed** for this version.
+0.1 defines six effects. The vocabulary is **closed** for this version.
 
 Adding an effect is an AgentSOP / schema revision (`capability.schema.json`). An implementation must not invent effect names ad hoc. New ones can be added later by evolving the contract.
 
@@ -145,6 +145,7 @@ Adding an effect is an AgentSOP / schema revision (`capability.schema.json`). An
 | `create` | Introduce a new resource. |
 | `write` | Replace content. |
 | `append` | Add to existing content. |
+| `delete` | Remove a resource. Distinct from `write`; deletion cannot masquerade as replacement. After a successful delete, the ResourceRef is immediately unknown to this fabric: later read/discovery do not return it. Delete capabilities return a non-ResourceRef receipt (for example `{"deleted": true}`), not the retired handle. |
 
 Pure transformations declare `effects: []`.
 
@@ -232,7 +233,7 @@ The catalogue-level graph is also a contract. Every `depends_on` entry must name
 
 The documents in `capabilities/` are a **demo library for this Fabric**, not AgentSOP primitives.
 
-They exist to exercise the model: discovery, consume, create, replace, a pure transform, an effect, composition, and one unresolved name. `journal` is an example resource kind. A different Fabric may never define a journal.
+They exist to exercise the model: discovery, consume, create, replace, delete, a pure transform, an effect, composition, and one unresolved name. `journal` is an example resource kind. A different Fabric may never define a journal.
 
 ---
 

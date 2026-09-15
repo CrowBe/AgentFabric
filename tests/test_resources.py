@@ -132,6 +132,118 @@ def test_replace_mutates_existing_blob_in_place(fabric: Fabric) -> None:
     assert Path(updated.locator).read_text(encoding="utf-8") == "replaced notes"
 
 
+def test_delete_is_ref_scoped_and_immediately_unknown(fabric: Fabric) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "ephemeral.md", "text": "bye"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    assert locator.is_file()
+    deleted = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output == {"deleted": True}
+    assert not locator.exists()
+    reread = fabric.invoke("operator", "blob.read", {"resource": created})
+    assert not reread.ok
+    assert reread.error.code == "UNKNOWN_RESOURCE"
+    rediscover = fabric.invoke("operator", "workspace.discover", {}).output
+    labels = {item["label"] for item in rediscover["resources"]}
+    assert "ephemeral.md" not in labels
+    again = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not again.ok
+    assert again.error.code == "UNKNOWN_RESOURCE"
+
+
+def test_delete_save_failure_does_not_commit(fabric: Fabric, monkeypatch) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "still-here.md", "text": "keep"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    assert locator.is_file()
+
+    def boom() -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fabric.resources, "_save", boom)
+    result = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+    assert locator.is_file()
+    assert locator.read_text(encoding="utf-8") == "keep"
+    assert fabric.resources.get(created["ref"]).kind == "blob"
+
+    monkeypatch.undo()
+    reloaded = Fabric(fabric.home)
+    assert Path(reloaded.resources.get(created["ref"]).locator).is_file()
+    deleted = reloaded.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output == {"deleted": True}
+    assert not locator.exists()
+
+
+def test_delete_unlink_failure_does_not_commit_or_reissue(fabric: Fabric, monkeypatch) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "keep-on-unlink-fail.md", "text": "still here"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    original = locator.read_bytes()
+    real_unlink = Path.unlink
+
+    def boom(self, *args, **kwargs):
+        if self.resolve() == locator.resolve():
+            raise OSError("simulated unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    result = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not result.ok
+    assert result.error.code == "RESOLVER_ERROR"
+    assert locator.is_file()
+    assert locator.read_bytes() == original
+    assert fabric.resources.get(created["ref"]).locator == str(locator.resolve())
+
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output["resources"]
+    matching = [item for item in discovered if item["resource"]["ref"] == created["ref"]]
+    assert matching == [{"resource": created, "label": "keep-on-unlink-fail.md"}]
+    assert [
+        item["label"] for item in discovered if item["label"] == "keep-on-unlink-fail.md"
+    ] == ["keep-on-unlink-fail.md"]
+
+    monkeypatch.undo()
+    deleted = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output == {"deleted": True}
+    assert not locator.exists()
+    rediscovered = fabric.invoke("operator", "workspace.discover", {}).output["resources"]
+    assert created["ref"] not in [item["resource"]["ref"] for item in rediscovered]
+    assert "keep-on-unlink-fail.md" not in {item["label"] for item in rediscovered}
+
+
+def test_delete_rejects_journal_kind(fabric: Fabric) -> None:
+    journal = _resource_by_label(fabric, "journal.md")
+    result = fabric.invoke("operator", "blob.delete", {"resource": journal})
+    assert not result.ok
+    assert result.error.code == "KIND_MISMATCH"
+    assert Path(fabric.resources.get(journal["ref"]).locator).is_file()
+
+
+def test_delete_rejects_smuggled_locator(fabric: Fabric) -> None:
+    notes = _resource_by_label(fabric, "notes.md")
+    result = fabric.invoke(
+        "operator",
+        "blob.delete",
+        {"resource": {**notes, "path": "/etc/passwd"}},
+    )
+    assert not result.ok
+    assert result.error.code == "INVALID_REF"
+    assert fabric.resources.get(notes["ref"]).kind == "blob"
+
+
 def test_replace_rejects_journal_kind(fabric: Fabric) -> None:
     journal = _resource_by_label(fabric, "journal.md")
     result = fabric.invoke(

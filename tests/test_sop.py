@@ -20,6 +20,7 @@ def test_capability_catalogue_is_valid() -> None:
         "blob.read",
         "blob.create",
         "blob.replace",
+        "blob.delete",
         "text.normalize",
         "journal.append",
         "journal.digest",
@@ -33,6 +34,11 @@ def test_capability_catalogue_is_valid() -> None:
     assert caps["blob.create"].authority["resources"] == []
     assert caps["blob.replace"].effects == ["write"]
     assert caps["blob.replace"].authority["resources"] == ["input.resource"]
+    assert caps["blob.delete"].effects == ["delete"]
+    assert caps["blob.delete"].authority["resources"] == ["input.resource"]
+    assert caps["blob.delete"].authority["effects"] == ["delete"]
+    assert caps["blob.delete"].output["properties"]["deleted"]["type"] == "boolean"
+    assert "$ref" not in str(caps["blob.delete"].output)
 
 
 def test_capability_documents_round_trip() -> None:

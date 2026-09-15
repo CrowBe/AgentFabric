@@ -119,6 +119,7 @@ Enough to exercise different parts of the model, small enough to hold in your he
 | `blob.read` | Resource consumption | yes |
 | `blob.create` | Resource creation; fabric chooses the locator; never replaces | yes |
 | `blob.replace` | Ref-scoped mutation of an existing blob | yes |
+| `blob.delete` | Ref-scoped removal of an existing blob (`delete` effect) | yes |
 | `text.normalize` | Pure transformation, no resource | yes |
 | `journal.append` | Example effectful operation | yes |
 | `journal.digest` | Example composition via `depends_on` → `blob.read` + `text.normalize` | yes |
@@ -133,13 +134,13 @@ Composition reuses resolvers. Nested invokes are limited to the parent capabilit
 A fresh Fabric has two principals:
 
 - **`operator`** — all capabilities, plus privileges `inspect`, `crystallise`, `fallback`. `inspect` here is control-plane: recent invocation payloads are included.
-- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot create, replace, append, inspect, crystallise, or use the fallback. Catalogue discovery uses `agentsop_list`, which does not include audit payloads.
+- **`guest`** — discover, read, normalize, digest, and (once crystallised) word count. Cannot create, replace, delete, append, inspect, crystallise, or use the fallback. Catalogue discovery uses `agentsop_list`, which does not include audit payloads.
 
 ```
 knowing a locator  ≠  possessing a ResourceRef  ≠  having authority to act on it
 ```
 
-`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE` for a Principal who is granted the capability. A Principal without a matching grant receives `DENIED` for both issued and unknown well-formed refs, so ResourceRefs are not an existence oracle. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF` regardless of grants.
+`blob.create` accepts a *label*, not a path. Labels such as `../../etc/passwd` are reduced to a safe basename inside the fabric workspace. A colliding label is a naming hint only: create allocates a new locator and ResourceRef rather than replacing the existing resource. Mutation uses `blob.replace` with that resource's ResourceRef, and is authorized against the ref. Removal uses `blob.delete` with the same kind of handle and a distinct `delete` grant; create/write authority is not enough. After a successful delete the ResourceRef is immediately unknown, and the capability returns `{"deleted": true}` rather than echoing the retired handle. Passing `{ "ref": "rf_deadbeef", "kind": "blob" }` that the fabric never issued fails with `UNKNOWN_RESOURCE` for a Principal who is granted the capability. A Principal without a matching grant receives `DENIED` for both issued and unknown well-formed refs, so ResourceRefs are not an existence oracle. Extra fields such as `path`, or a `ref` that does not match `rf_` plus lowercase alphanumerics, fail with `INVALID_REF` regardless of grants.
 
 The owner of the Fabric chooses the trust model. AgentFabric only provides the mechanism.
 

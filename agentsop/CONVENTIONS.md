@@ -2,7 +2,7 @@
 
 This is how AgentFabric grows. Read it before adding a capability or resolver.
 
-The first-run **example** library is small on purpose: discovery, read, create, replace, a pure transform, an effect, and one composition. `journal.*` is an example domain, not an AgentSOP primitive. Everything else should appear because it recurred, not because we anticipated it.
+The first-run **example** library is small on purpose: discovery, read, create, replace, delete, a pure transform, an effect, and one composition. `journal.*` is an example domain, not an AgentSOP primitive. Everything else should appear because it recurred, not because we anticipated it.
 
 ```
 clone → /set-up → example resolvers live
@@ -90,7 +90,7 @@ Do not give agents locators. Do not accept locators in capability input.
 
 `operator` has `capability=*`. New capabilities are available to the operator immediately.
 
-`guest` is allowlisted per capability. Do not grant `guest` create, replace, append, inspect, crystallise, or fallback unless the owner of this Fabric says so.
+`guest` is allowlisted per capability. Do not grant `guest` create, replace, delete, append, inspect, crystallise, or fallback unless the owner of this Fabric says so.
 
 ### Tests
 
