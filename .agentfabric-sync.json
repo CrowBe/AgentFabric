@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "repo_owned": {
+    "include": [
+      ".agentfabric-sync.json",
+      ".agents/**",
+      ".cursor/**",
+      ".github/**",
+      ".gitignore",
+      "*.md",
+      "*.toml",
+      "agentsop/**",
+      "docs/**",
+      "examples/**",
+      "src/**",
+      "tests/**"
+    ]
+  }
+}

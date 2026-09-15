@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from agentfabric.catalogue import find_agentsop_root, merge_catalogue
 from agentfabric.cli import main
 from agentfabric.fabric import Fabric
 from agentfabric.scaffold import scaffold
 from agentfabric.schema import validate_capability_document
-from agentfabric.sync import parse_ownership_leaks, read_origin, sync_fabric
+from agentfabric.sync import (
+    parse_ownership_leaks,
+    read_origin,
+    read_repo_ownership,
+    render_sync,
+    repo_owned_includes,
+    sync_fabric,
+)
 from agentfabric.types import Capability
 
 
@@ -27,6 +37,20 @@ def _cap(cap_id: str, *, title: str | None = None, source: str = "") -> Capabili
         "depends_on": [],
     }
     return validate_capability_document(doc, source=source)
+
+
+def _init_git_repo(path: Path) -> None:
+    try:
+        completed = subprocess.run(
+            ["git", "init", "-q", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - git missing
+        pytest.skip("git is unavailable")
+    if completed.returncode != 0:  # pragma: no cover - git unusable
+        pytest.skip("git could not initialise a scratch repository")
 
 
 def _copy_sop(tmp_path: Path, ids: list[str]) -> Path:
@@ -297,6 +321,132 @@ def test_ownership_leak_parser_treats_tracked_repo_as_upstream() -> None:
         "AGENTS.md",
         ".agents/skills/agentfabric/sync-upstream/SKILL.md",
     }
+
+
+def test_ownership_manifest_limits_untracked_feedback(tmp_path: Path) -> None:
+    (tmp_path / ".agentfabric-sync.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repo_owned": {"include": ["src/**", "*.md"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    porcelain = "\n".join(
+        [
+            " M tracked-anywhere.bin",
+            "?? src/agentfabric/new_module.py",
+            "?? DESIGN.md",
+            "?? .codex/config.toml",
+        ]
+    )
+
+    leaks = parse_ownership_leaks(
+        porcelain,
+        untracked_includes=repo_owned_includes(tmp_path),
+    )
+
+    assert {item["path"] for item in leaks} == {
+        "tracked-anywhere.bin",
+        "src/agentfabric/new_module.py",
+        "DESIGN.md",
+    }
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        '{"version": 1, "repo_owned": {"include": ["src/**",]}}',
+        '{"version": 1, "repo_owned": {"include": "src/**"}}',
+        '{"version": 1, "repo-owned": {"include": ["src/**"]}}',
+        '{"version": 1, "repo_owned": {"include": []}}',
+        '{"version": 1, "repo_owned": {"include": ["src/**", 7]}}',
+        "[]",
+    ],
+)
+def test_unusable_ownership_manifest_keeps_classification_fail_safe(
+    manifest: str, tmp_path: Path
+) -> None:
+    (tmp_path / ".agentfabric-sync.json").write_text(manifest, encoding="utf-8")
+
+    includes, manifest_feedback = read_repo_ownership(tmp_path)
+
+    assert includes == ("**",)
+    assert repo_owned_includes(tmp_path) == ("**",)
+    assert [item["path"] for item in manifest_feedback] == [".agentfabric-sync.json"]
+    assert ".agentfabric-sync.json" in manifest_feedback[0]["message"]
+
+    leaks = parse_ownership_leaks(
+        "\n".join(["?? .codex/config.toml", "?? .fabric/capabilities/text.hash.json"]),
+        untracked_includes=includes,
+    )
+
+    assert {item["path"] for item in leaks} == {".codex/config.toml"}
+
+
+def test_absent_ownership_manifest_stays_silent(tmp_path: Path) -> None:
+    includes, manifest_feedback = read_repo_ownership(tmp_path)
+
+    assert includes == ("**",)
+    assert manifest_feedback == []
+
+
+def test_sync_report_names_an_unusable_manifest_and_keeps_flagging(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _init_git_repo(checkout)
+    sop = _copy_sop(checkout, ["blob.read"])
+    (checkout / ".agentfabric-sync.json").write_text(
+        '{"version": 1, "repo_owned": {"include": []}}',
+        encoding="utf-8",
+    )
+    (checkout / "examples").mkdir()
+    (checkout / "examples" / "new_resolver.py").write_text("VALUE = 1\n", encoding="utf-8")
+    fabric = Fabric.init(checkout / ".fabric")
+
+    report = sync_fabric(fabric.home, sop_root=sop, apply=False)
+
+    feedback = report["feedback"]
+    manifest_items = [item for item in feedback if item["kind"] == "invalid_ownership_manifest"]
+    assert [item["path"] for item in manifest_items] == [".agentfabric-sync.json"]
+    assert ".agentfabric-sync.json" in manifest_items[0]["message"]
+    leaked = {item["path"] for item in feedback if item["kind"] == "ownership_leak"}
+    assert "examples/new_resolver.py" in leaked
+    assert not any(path.startswith(".fabric/") for path in leaked)
+    assert ".agentfabric-sync.json" in render_sync(report)
+
+
+def test_shipped_ownership_manifest_covers_every_tracked_top_level() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - git missing
+        pytest.skip("git is unavailable")
+    if tracked.returncode != 0:  # pragma: no cover - not a checkout
+        pytest.skip("tests are not running inside a git checkout")
+
+    top_level_dirs = sorted(
+        {line.split("/", 1)[0] for line in tracked.stdout.splitlines() if "/" in line}
+    )
+    assert "examples" in top_level_dirs
+    probes = [f"{name}/ownership-probe.md" for name in top_level_dirs]
+    porcelain = "\n".join(
+        [f"?? {probe}" for probe in probes]
+        + ["?? .codex/config.toml", "?? .fabric/capabilities/text.hash.json"]
+    )
+
+    leaks = parse_ownership_leaks(
+        porcelain,
+        untracked_includes=repo_owned_includes(repo_root),
+    )
+
+    assert {item["path"] for item in leaks} == set(probes)
 
 
 def test_cli_scaffold_and_sync(tmp_path: Path, capsys) -> None:

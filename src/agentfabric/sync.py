@@ -7,7 +7,9 @@ conflicts that need a semantic decision.
 
 from __future__ import annotations
 
+import json
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from agentfabric.catalogue import (
 from agentfabric.store import read_json, write_json
 
 ORIGIN_NAME = "origin.json"
+REPO_OWNERSHIP_NAME = ".agentfabric-sync.json"
 
 
 def origin_path(home: Path) -> Path:
@@ -75,10 +78,61 @@ def git_porcelain(root: Path) -> str:
     return completed.stdout
 
 
+def _unusable_ownership_manifest(reason: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    return ("**",), [
+        {
+            "kind": "invalid_ownership_manifest",
+            "path": REPO_OWNERSHIP_NAME,
+            "message": (
+                f"{REPO_OWNERSHIP_NAME} {reason}; until it is fixed, every untracked "
+                "path outside .fabric/ is reported as repo-owned"
+            ),
+        }
+    ]
+
+
+def read_repo_ownership(root: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    manifest = Path(root) / REPO_OWNERSHIP_NAME
+    try:
+        config = read_json(manifest, {})
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return _unusable_ownership_manifest(f"could not be read ({exc})")
+    repo_owned = config.get("repo_owned") if isinstance(config, dict) else None
+    includes = repo_owned.get("include") if isinstance(repo_owned, dict) else None
+    if (
+        not isinstance(includes, list)
+        or not includes
+        or not all(isinstance(pattern, str) and pattern for pattern in includes)
+    ):
+        if not manifest.is_file():
+            return ("**",), []
+        return _unusable_ownership_manifest(
+            "does not declare repo_owned.include as a non-empty list of path patterns"
+        )
+    return tuple(includes), []
+
+
+def repo_owned_includes(root: Path) -> tuple[str, ...]:
+    return read_repo_ownership(root)[0]
+
+
+def _matches_repo_owned(path: str, patterns: tuple[str, ...]) -> bool:
+    return any(
+        pattern == "**"
+        or (
+            fnmatchcase(path, pattern)
+            if "/" in pattern
+            else "/" not in path and fnmatchcase(path, pattern)
+        )
+        for pattern in patterns
+    )
+
+
 def parse_ownership_leaks(
     porcelain: str,
     *,
     local_prefixes: tuple[str, ...] = LOCAL_PATH_PREFIXES,
+    untracked_includes: tuple[str, ...] = ("**",),
 ) -> list[dict[str, str]]:
     leaks: list[dict[str, str]] = []
     for raw in porcelain.splitlines():
@@ -93,14 +147,18 @@ def parse_ownership_leaks(
             path == prefix.rstrip("/") or path.startswith(prefix) for prefix in local_prefixes
         ):
             continue
+        status = raw[:2].strip()
+        if status == "??" and not _matches_repo_owned(path, untracked_includes):
+            continue
         leaks.append(
             {
                 "kind": "ownership_leak",
                 "path": path,
-                "status": raw[:2].strip(),
+                "status": status,
                 "message": (
-                    f"{path} is dirty in git-tracked repository content; "
-                    "machine-specific evolution belongs in .fabric/, not in the checkout"
+                    f"{path} has uncommitted changes in repo-owned checkout content; "
+                    "commit or remove deliberate upstream work before the Git update, "
+                    "and keep machine-specific Fabric evolution under .fabric/"
                 ),
             }
         )
@@ -343,7 +401,14 @@ def sync_fabric(
     git_root = discover_git_root(root)
     feedback: list[dict[str, Any]] = []
     if git_root is not None:
-        feedback.extend(parse_ownership_leaks(git_porcelain(git_root)))
+        includes, manifest_feedback = read_repo_ownership(git_root)
+        feedback.extend(manifest_feedback)
+        feedback.extend(
+            parse_ownership_leaks(
+                git_porcelain(git_root),
+                untracked_includes=includes,
+            )
+        )
 
     next_accepted = _next_accepted(
         current_caps=current_caps,
