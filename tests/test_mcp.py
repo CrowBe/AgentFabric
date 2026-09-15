@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from typing import Any
 
 from pathlib import Path
 
@@ -147,3 +148,186 @@ def test_mcp_stdio_initialize_and_list(fabric: Fabric) -> None:
     names = {tool["name"] for tool in listed_result["result"]["tools"]}
     assert "agentsop_invoke" in names
     assert "fallback_exec" in names
+
+
+def _serve_lines(fabric: Fabric, *messages: Any) -> list[dict[str, Any]]:
+    payload = "".join(
+        (item if isinstance(item, str) else json.dumps(item)) + "\n" for item in messages
+    )
+    stdin = io.StringIO(payload)
+    stdout = io.StringIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    return [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
+
+
+def test_mcp_batch_does_not_terminate_serve(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        [{"jsonrpc": "2.0", "id": 1, "method": "ping"}],
+        {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+    )
+    assert lines[0]["error"]["code"] == -32600
+    assert "batch" in lines[0]["error"]["message"]
+    assert lines[1]["id"] == 2
+    assert lines[1]["result"] == {}
+
+
+def test_mcp_notifications_produce_no_response(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {"jsonrpc": "2.0", "method": "ping"},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+    )
+    assert lines == [{"jsonrpc": "2.0", "id": 3, "result": {}}]
+
+
+def test_mcp_parse_error_then_recovers(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        "{not-json",
+        {"jsonrpc": "2.0", "id": 4, "method": "ping"},
+    )
+    assert lines[0]["error"]["code"] == -32700
+    assert lines[1]["id"] == 4
+    assert lines[1]["result"] == {}
+
+
+def test_mcp_unknown_method(fabric: Fabric) -> None:
+    lines = _serve_lines(fabric, {"jsonrpc": "2.0", "id": 5, "method": "nope"})
+    assert lines[0]["error"]["code"] == -32601
+
+
+def test_mcp_tools_call_non_object_params(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": ["agentsop_list"]},
+        {"jsonrpc": "2.0", "id": 7, "method": "ping"},
+    )
+    assert lines[0]["error"]["code"] == -32602
+    blob = json.dumps(lines[0])
+    assert "KeyError" not in blob
+    assert "AttributeError" not in blob
+    assert lines[1]["id"] == 7
+
+
+def test_mcp_tools_call_missing_name_is_invalid_params(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"arguments": {}}},
+    )
+    assert lines[0]["error"]["code"] == -32602
+    assert "UNKNOWN_TOOL" not in json.dumps(lines[0])
+
+
+def test_mcp_invoke_missing_capability_is_invalid_params(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {"name": "agentsop_invoke", "arguments": {"input": {}}},
+        },
+    )
+    assert lines[0]["error"]["code"] == -32602
+    blob = json.dumps(lines[0])
+    assert "'capability'" not in blob
+    assert "KeyError" not in blob
+    assert "AttributeError" not in blob
+
+
+def test_mcp_unknown_tool_is_structured(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "not_a_tool", "arguments": {}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {"name": "agentsop_list", "arguments": {}},
+        },
+    )
+    error_text = lines[0]["result"]["content"][0]["text"]
+    assert lines[0]["result"]["isError"] is True
+    assert "UNKNOWN_TOOL" in error_text
+    assert lines[1]["id"] == 11
+    assert "result" in lines[1]
+
+
+def test_handle_tool_rejects_non_object_arguments(fabric: Fabric) -> None:
+    binding = McpBinding(fabric, "operator")
+    try:
+        binding.handle_tool("agentsop_invoke", ["blob.create"])  # type: ignore[arg-type]
+    except Exception as exc:
+        assert getattr(exc, "code", None) == "INVALID_PARAMS"
+        assert "KeyError" not in str(exc)
+        assert "AttributeError" not in str(exc)
+    else:
+        raise AssertionError("non-object arguments must fail")
+
+
+def test_mcp_invalid_idless_object_is_invalid_request(fabric: Fabric) -> None:
+    lines = _serve_lines(
+        fabric,
+        {},
+        {"jsonrpc": "2.0", "id": 12, "method": "ping"},
+    )
+    assert lines[0]["id"] is None
+    assert lines[0]["error"]["code"] == -32600
+    assert lines[1]["id"] == 12
+    assert lines[1]["result"] == {}
+
+
+def _frame(message: dict[str, Any]) -> bytes:
+    body = json.dumps(message, ensure_ascii=False).encode("utf-8")
+    return f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+
+
+def _parse_framed(raw: bytes) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    buf = raw
+    while buf:
+        header, rest = buf.split(b"\r\n\r\n", 1)
+        length = int(header.decode("ascii").split(":", 1)[1].strip())
+        body, buf = rest[:length], rest[length:]
+        messages.append(json.loads(body.decode("utf-8")))
+    return messages
+
+
+def test_mcp_framed_multibyte_does_not_desync(fabric: Fabric) -> None:
+    first = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"note": "café"}}
+    second = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+    stdin = io.BytesIO(_frame(first) + _frame(second))
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert [item["id"] for item in messages] == [1, 2]
+    assert all(item["result"] == {} for item in messages)
+
+
+def test_mcp_negative_content_length_then_recovers(fabric: Fabric) -> None:
+    ping = _frame({"jsonrpc": "2.0", "id": 13, "method": "ping"})
+    stdin = io.BytesIO(b"Content-Length: -1\r\n\r\n" + ping)
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert messages[0]["error"]["code"] == -32700
+    assert messages[1]["id"] == 13
+    assert messages[1]["result"] == {}
+
+
+def test_mcp_large_framed_request_then_recovers(fabric: Fabric) -> None:
+    """Bodies larger than 1 MiB remain valid; the next framed request must still parse."""
+    large = {"jsonrpc": "2.0", "id": 14, "method": "ping", "params": {"note": "x" * 1_048_577}}
+    ping = {"jsonrpc": "2.0", "id": 15, "method": "ping"}
+    stdin = io.BytesIO(_frame(large) + _frame(ping))
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert [item["id"] for item in messages] == [14, 15]
+    assert all(item["result"] == {} for item in messages)
