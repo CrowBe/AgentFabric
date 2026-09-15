@@ -10,6 +10,7 @@ EXAMPLE_RESOLVED_CAPABILITIES: tuple[str, ...] = (
     "blob.read",
     "blob.create",
     "blob.replace",
+    "blob.delete",
     "text.normalize",
     "journal.append",
     "journal.digest",

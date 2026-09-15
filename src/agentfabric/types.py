@@ -4,13 +4,13 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-Effect = Literal["discover", "read", "create", "write", "append"]
+Effect = Literal["discover", "read", "create", "write", "append", "delete"]
 Privilege = Literal["inspect", "crystallise", "fallback"]
 ResolutionStatus = Literal["resolved", "unresolved", "blocked", "unavailable"]
 
 REF_PATTERN = r"^rf_[a-z0-9]+$"
 CAPABILITY_ID_PATTERN = r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$"
-KNOWN_EFFECTS: tuple[Effect, ...] = ("discover", "read", "create", "write", "append")
+KNOWN_EFFECTS: tuple[Effect, ...] = ("discover", "read", "create", "write", "append", "delete")
 KNOWN_PRIVILEGES: tuple[Privilege, ...] = ("inspect", "crystallise", "fallback")
 
 

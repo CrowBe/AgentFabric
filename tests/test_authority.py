@@ -119,3 +119,40 @@ def test_replace_is_resource_scoped(fabric: Fabric) -> None:
     assert Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8") == "edited notes"
     assert Path(fabric.resources.get(other["ref"]).locator).read_text(encoding="utf-8") == "other"
 
+
+def test_guest_cannot_delete(fabric: Fabric) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "scratch.md", "text": "temp"},
+    ).output["resource"]
+    result = fabric.invoke("guest", "blob.delete", {"resource": created})
+    assert not result.ok
+    assert result.error.code == "DENIED"
+    assert fabric.resources.get(created["ref"]).kind == "blob"
+
+
+def test_create_and_write_cannot_delete(fabric: Fabric) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "owned.md", "text": "keep"},
+    ).output["resource"]
+    fabric.add_principal("writer")
+    fabric.authority.add(
+        principal="writer",
+        capability="blob.create",
+        resource="*",
+        effects=["create"],
+    )
+    fabric.authority.add(
+        principal="writer",
+        capability="blob.replace",
+        resource=created["ref"],
+        effects=["write"],
+    )
+    denied = fabric.invoke("writer", "blob.delete", {"resource": created})
+    assert not denied.ok
+    assert denied.error.code == "DENIED"
+    assert Path(fabric.resources.get(created["ref"]).locator).read_text(encoding="utf-8") == "keep"
+

@@ -54,7 +54,7 @@
       "description": "Closed AgentSOP 0.1 vocabulary. Adding an effect is a schema revision, not an ad-hoc implementation extension.",
       "items": {
         "type": "string",
-        "enum": ["discover", "read", "create", "write", "append"]
+        "enum": ["discover", "read", "create", "write", "append", "delete"]
       }
     },
     "idempotent": { "type": "boolean" },
@@ -72,7 +72,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["discover", "read", "create", "write", "append"]
+            "enum": ["discover", "read", "create", "write", "append", "delete"]
           }
         }
       }

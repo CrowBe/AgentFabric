@@ -11,6 +11,7 @@ def test_walkthrough_covers_the_mvp_script(tmp_path: Path) -> None:
     assert steps["starting_catalogue"]["text.word_count"] == "unresolved"
     assert steps["starting_catalogue"]["blob.read"] == "resolved"
     assert steps["starting_catalogue"]["blob.replace"] == "resolved"
+    assert steps["starting_catalogue"]["blob.delete"] == "resolved"
     assert steps["discover"]["ok"] is True
     assert steps["replace"]["ok"] is True
     assert steps["append_operator"]["ok"] is True

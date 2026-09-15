@@ -1,0 +1,29 @@
+{
+  "agentsop": "0.1",
+  "id": "blob.delete",
+  "title": "Delete blob",
+  "description": "Remove a blob identified by a ResourceRef. Deletion is always ref-addressed, independently grantable, and uses the delete effect rather than write. After success the handle is immediately unknown: later read and discovery do not return it.",
+  "input": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" }
+    },
+    "required": ["resource"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "resource": { "$ref": "#/$defs/ResourceRef" }
+    },
+    "required": ["resource"],
+    "additionalProperties": false
+  },
+  "effects": ["delete"],
+  "idempotent": false,
+  "authority": {
+    "resources": ["input.resource"],
+    "effects": ["delete"]
+  },
+  "depends_on": []
+}

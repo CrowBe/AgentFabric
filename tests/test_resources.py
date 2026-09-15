@@ -132,6 +132,49 @@ def test_replace_mutates_existing_blob_in_place(fabric: Fabric) -> None:
     assert Path(updated.locator).read_text(encoding="utf-8") == "replaced notes"
 
 
+def test_delete_is_ref_scoped_and_immediately_unknown(fabric: Fabric) -> None:
+    created = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "ephemeral.md", "text": "bye"},
+    ).output["resource"]
+    locator = Path(fabric.resources.get(created["ref"]).locator)
+    assert locator.is_file()
+    deleted = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert deleted.ok
+    assert deleted.output["resource"] == created
+    assert not locator.exists()
+    reread = fabric.invoke("operator", "blob.read", {"resource": created})
+    assert not reread.ok
+    assert reread.error.code == "UNKNOWN_RESOURCE"
+    rediscover = fabric.invoke("operator", "workspace.discover", {}).output
+    labels = {item["label"] for item in rediscover["resources"]}
+    assert "ephemeral.md" not in labels
+    again = fabric.invoke("operator", "blob.delete", {"resource": created})
+    assert not again.ok
+    assert again.error.code == "UNKNOWN_RESOURCE"
+
+
+def test_delete_rejects_journal_kind(fabric: Fabric) -> None:
+    journal = _resource_by_label(fabric, "journal.md")
+    result = fabric.invoke("operator", "blob.delete", {"resource": journal})
+    assert not result.ok
+    assert result.error.code == "KIND_MISMATCH"
+    assert Path(fabric.resources.get(journal["ref"]).locator).is_file()
+
+
+def test_delete_rejects_smuggled_locator(fabric: Fabric) -> None:
+    notes = _resource_by_label(fabric, "notes.md")
+    result = fabric.invoke(
+        "operator",
+        "blob.delete",
+        {"resource": {**notes, "path": "/etc/passwd"}},
+    )
+    assert not result.ok
+    assert result.error.code == "INVALID_REF"
+    assert fabric.resources.get(notes["ref"]).kind == "blob"
+
+
 def test_replace_rejects_journal_kind(fabric: Fabric) -> None:
     journal = _resource_by_label(fabric, "journal.md")
     result = fabric.invoke(

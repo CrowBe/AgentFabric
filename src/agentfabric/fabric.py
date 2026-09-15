@@ -28,7 +28,7 @@ from agentfabric.errors import (
 from agentfabric.grants import Authority
 from agentfabric.ids import new_invocation_id
 from agentfabric.resolvers import ResolverBinding, ResolverFn, load_python_resolver
-from agentfabric.resolvers import blob_create, blob_read, blob_replace, journal_append, journal_digest
+from agentfabric.resolvers import blob_create, blob_delete, blob_read, blob_replace, journal_append, journal_digest
 from agentfabric.resolvers import text_normalize, workspace_discover
 from agentfabric.resources import ResourceRegistry, _is_inside
 from agentfabric.schema import extract_resource_refs, validate_against
@@ -49,6 +49,7 @@ BUILTIN_RESOLVERS: dict[str, tuple[str, ResolverFn]] = {
     "blob.read": ("builtin:blob.read", blob_read.resolve),
     "blob.create": ("builtin:blob.create", blob_create.resolve),
     "blob.replace": ("builtin:blob.replace", blob_replace.resolve),
+    "blob.delete": ("builtin:blob.delete", blob_delete.resolve),
     "text.normalize": ("builtin:text.normalize", text_normalize.resolve),
     "journal.append": ("builtin:journal.append", journal_append.resolve),
     "journal.digest": ("builtin:journal.digest", journal_digest.resolve),

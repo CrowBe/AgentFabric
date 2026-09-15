@@ -113,6 +113,14 @@ class ResourceRegistry:
             raise UnknownResource("resource locator is outside the fabric workspace")
         return path
 
+    def delete(self, resource: ResourceRef, *kinds: str) -> ResourceRecord:
+        record = self.require(resource, *kinds)
+        path = self.locator_path(record)
+        path.unlink(missing_ok=True)
+        del self._records[record.ref]
+        self._save()
+        return record
+
 
 def _is_inside(root: Path, path: Path) -> bool:
     try:
