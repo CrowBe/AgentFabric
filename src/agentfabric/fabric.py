@@ -21,10 +21,12 @@ from agentfabric.errors import (
     FabricError,
     InvalidInput,
     InvalidRef,
+    KindMismatch,
     ResolverError,
     ResolverUnavailable,
     UndeclaredDependency,
     UnknownCapability,
+    UnknownResource,
     Unresolved,
 )
 from agentfabric.grants import Authority
@@ -33,7 +35,7 @@ from agentfabric.resolvers import ResolverBinding, ResolverFn, load_python_resol
 from agentfabric.resolvers import blob_create, blob_delete, blob_read, blob_replace, journal_append, journal_digest
 from agentfabric.resolvers import text_normalize, workspace_discover
 from agentfabric.resources import ResourceRegistry, _is_inside
-from agentfabric.schema import extract_resource_refs, validate_against
+from agentfabric.schema import collect_resource_refs, extract_resource_refs, validate_against
 from agentfabric.store import read_json, write_json
 from agentfabric.sync import read_origin, record_origin
 from agentfabric.types import (
@@ -180,6 +182,7 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
+        self._audit_health: dict[str, Any] = {"ok": True, "error": None}
         # Replay caches are deferred. `idempotent` on a capability document is a
         # semantic property of the operation, not a promise that this runtime
         # (or any current binding) maintains a key. The CLI and MCP surfaces do
@@ -429,7 +432,7 @@ class Fabric:
                 error=ErrorBody(code=exc.code, message=exc.message),
             )
         duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        self.audit.record(
+        self._record_audit(
             InvocationRecord(
                 id=invocation_id,
                 ts=utc_now(),
@@ -517,7 +520,9 @@ class Fabric:
             raise ResolverError(f"resolver {binding.label} raised: {exc}") from exc
         try:
             typed_output = validate_against(cap.output, output, path="output")
-        except (InvalidInput, InvalidRef) as exc:
+            for ref_dict in collect_resource_refs(cap.output, typed_output):
+                self.resources.require(ResourceRef.from_dict(ref_dict))
+        except (InvalidInput, InvalidRef, UnknownResource, KindMismatch) as exc:
             raise ResolverError(
                 f"resolver {binding.label} returned invalid output: {exc.message}"
             ) from exc
@@ -602,7 +607,7 @@ class Fabric:
             ),
             duration_ms=0,
         )
-        self.audit.record(record)
+        self._record_audit(record)
         from agentfabric.notice import record as record_opportunity
 
         record_opportunity(
@@ -622,6 +627,27 @@ class Fabric:
             "agentsop": None,
             "note": "fallback.exec is a harness escape hatch, not an AgentSOP capability",
         }
+
+    def _record_audit(self, record: InvocationRecord) -> None:
+        """Best-effort observability. Must not replace a determined Result."""
+        try:
+            self.audit.record(record)
+        except Exception as exc:
+            self._note_audit_failure(exc)
+            return
+        self._audit_health = {"ok": True, "error": None}
+
+    def _note_audit_failure(self, exc: BaseException) -> None:
+        import sys
+
+        self._audit_health = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        sys.stderr.write(
+            "agentfabric: audit recording failed; invocation Result is unchanged: "
+            f"{exc}\n"
+        )
 
     def snapshot(self, *, viewer: str | None = None) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
@@ -675,6 +701,7 @@ class Fabric:
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
             "invocations": invocations,
+            "audit": dict(self._audit_health),
             "opportunities": open_opportunities(self.home, resolved=resolved),
         }
 

@@ -8,6 +8,9 @@ from agentfabric.types import ResolutionStatus
 def render_snapshot(snapshot: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"AgentFabric  home={snapshot['home']}  agentsop={snapshot['agentsop']}")
+    audit = snapshot.get("audit") or {}
+    if audit and audit.get("ok") is False:
+        lines.append(f"Audit        degraded  {audit.get('error') or 'recording failed'}")
     ownership = snapshot.get("ownership") or {}
     if ownership:
         commit = ownership.get("upstream_commit") or "—"

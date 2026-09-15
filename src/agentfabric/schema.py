@@ -133,6 +133,33 @@ def validate_against(schema: dict[str, Any], value: Any, *, path: str = "input")
     return result
 
 
+def collect_resource_refs(schema: dict[str, Any], value: Any) -> list[dict[str, str]]:
+    """Collect ResourceRef objects from a value that already passed schema validation."""
+    if "$ref" in schema:
+        if schema["$ref"] != RESOURCE_REF_DEF:
+            return []
+        from agentfabric.types import ResourceRef
+
+        return [ResourceRef.from_dict(value).to_dict()]
+    expected = schema.get("type")
+    refs: list[dict[str, str]] = []
+    if expected == "object" and isinstance(value, dict):
+        props = schema.get("properties", {})
+        additional = schema.get("additionalProperties", True)
+        for key, item in value.items():
+            if key in props:
+                refs.extend(collect_resource_refs(props[key], item))
+            elif isinstance(additional, dict):
+                refs.extend(collect_resource_refs(additional, item))
+        return refs
+    if expected == "array" and isinstance(value, list):
+        item_schema = schema.get("items", {})
+        for item in value:
+            refs.extend(collect_resource_refs(item_schema, item))
+        return refs
+    return refs
+
+
 def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Capability:
     if doc.get("agentsop") != "0.1":
         raise InvalidInput("agentsop must be '0.1'")
