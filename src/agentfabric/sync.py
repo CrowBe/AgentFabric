@@ -7,9 +7,9 @@ conflicts that need a semantic decision.
 
 from __future__ import annotations
 
-from fnmatch import fnmatchcase
 import json
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
