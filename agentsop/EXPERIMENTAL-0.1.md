@@ -96,7 +96,13 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`input` / `output`** — JSON Schema objects. 0.1 uses a small subset: `object`, `string`, `integer`, `array`, `boolean`, `required`, `additionalProperties`, `enum`, and `$ref` to `ResourceRef`.
 - **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
 - **`idempotent`** — semantic property of the operation: repeating equivalent typed input is expected to have the same kind of result without additional caller-visible effects. It is **not** a promise that a binding maintains a replay cache. 0.1 does not accept an `idempotency_key` on CLI, MCP, or `Fabric.invoke`. Unexpected keys are rejected rather than ignored. Persistent replay, canonical request digests, and effectful retry receipts are deferred until an effectful idempotent capability creates a concrete need.
-- **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
+- **`authority.resources`** — top-level input fields that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
+
+  0.1 supports only a top-level scalar selector: `input.` plus a property name that does **not** contain `.` (`input.resource`, `input.resource-ref`). Hyphens are fine; `.` is reserved, and 0.1 has no escaping syntax to name a key such as `resource.ref`. Catalogue validation rejects nested/collection selectors (`input.wrapper.resource`, `input.resources.*`) and ResourceRef properties whose names contain `.`. JSON Pointer, wildcards, and batch authorization are a later contract revision, driven by a real capability.
+
+  The live input schema is checked at catalogue load: every selector MUST name a top-level property whose schema is `$ref: #/$defs/ResourceRef`. A document that points at an array, a nested object, or an unrelated field is rejected rather than loading with inexecutable authority.
+
+  At invocation the runtime extracts each listed ResourceRef and checks existence, kind, and grants before the resolver runs.
 - **`authority.effects`** — effects that must be granted. The set must equal `effects` (order does not matter; duplicates are invalid). A write-declaring capability cannot authorize as if it were read-only.
 - **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references. Every listed id must exist in the same catalogue, and the graph must be acyclic.
 

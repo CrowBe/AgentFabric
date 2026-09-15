@@ -215,6 +215,9 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
         raise InvalidInput(f"capability has unexpected fields: {sorted(extra)}")
     assert_supported_schema(doc["input"], path="input")
     assert_supported_schema(doc["output"], path="output")
+    _assert_authority_target_names(doc["input"])
+    for pointer in authority["resources"]:
+        assert_authority_selector(pointer, doc["input"])
     return Capability(
         agentsop="0.1",
         id=cap_id,
@@ -233,12 +236,56 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
     )
 
 
+def parse_authority_selector(pointer: str) -> str:
+    """0.1: `input.` plus a top-level property name that does not contain '.'."""
+    if not isinstance(pointer, str) or not pointer.startswith("input."):
+        raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
+    rest = pointer[len("input.") :]
+    if not rest or "." in rest or rest == "*":
+        raise InvalidInput(
+            f"{pointer!r} is not a top-level scalar ResourceRef selector; "
+            "nested objects and collections are not supported in 0.1"
+        )
+    return rest
+
+
+def _assert_authority_target_names(input_schema: dict[str, Any]) -> None:
+    """ResourceRef fields that 0.1 cannot name in authority.resources are rejected."""
+    if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+        return
+    props = input_schema.get("properties")
+    if not isinstance(props, dict):
+        return
+    for key, target in props.items():
+        if not isinstance(key, str) or "." not in key:
+            continue
+        if isinstance(target, dict) and target.get("$ref") == RESOURCE_REF_DEF:
+            raise InvalidInput(
+                f"input property {key!r} contains '.'; 0.1 cannot target dotted "
+                "names in authority.resources (no escaping syntax)"
+            )
+
+
+def assert_authority_selector(pointer: str, input_schema: dict[str, Any]) -> None:
+    """Reject selectors that are not top-level ResourceRef fields."""
+    key = parse_authority_selector(pointer)
+    if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+        raise InvalidInput(f"{pointer}: input is not an object")
+    props = input_schema.get("properties")
+    if not isinstance(props, dict) or key not in props:
+        raise InvalidInput(f"{pointer}: input has no property {key!r}")
+    target = props[key]
+    if not isinstance(target, dict) or target.get("$ref") != RESOURCE_REF_DEF:
+        raise InvalidInput(
+            f"{pointer} must target a top-level ResourceRef field; "
+            "nested objects and collections are not supported in 0.1"
+        )
+
+
 def extract_resource_refs(capability: Capability, input_value: dict[str, Any]) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
     for pointer in capability.authority.get("resources", []):
-        if not pointer.startswith("input."):
-            raise InvalidInput(f"unsupported authority resource pointer: {pointer}")
-        key = pointer[len("input.") :]
+        key = parse_authority_selector(pointer)
         if key not in input_value:
             raise InvalidInput(f"{pointer} is missing")
         from agentfabric.types import ResourceRef

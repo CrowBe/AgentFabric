@@ -401,3 +401,132 @@ def resolve(ctx, input):
     assert result.error.message.startswith("blob.read failed: UNKNOWN_RESOURCE:")
     assert "compose.mid failed" not in result.error.message
     assert "DEPENDENCY_FAILED" not in result.error.message
+
+
+def _batch_capability(**overrides: Any) -> dict[str, Any]:
+    doc = {
+        "agentsop": "0.1",
+        "id": "blob.batch_read",
+        "title": "Batch read",
+        "description": "Read several blobs.",
+        "input": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/ResourceRef"},
+                }
+            },
+            "required": ["resources"],
+            "additionalProperties": False,
+        },
+        "output": {
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        "effects": ["read"],
+        "idempotent": True,
+        "authority": {"resources": ["input.resources"], "effects": ["read"]},
+        "depends_on": [],
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_top_level_scalar_selector_loads() -> None:
+    validate_capability_document(_resource_compose_capability("blob.read", depends_on=[]))
+
+
+def test_hyphenated_top_level_selector_loads() -> None:
+    doc = _minimal_capability(
+        id="blob.hyphen",
+        input={
+            "type": "object",
+            "properties": {"resource-ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource-ref"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.resource-ref"], "effects": []},
+    )
+    cap = validate_capability_document(doc)
+    assert cap.authority["resources"] == ["input.resource-ref"]
+
+
+def test_non_ref_field_selector_is_rejected() -> None:
+    doc = _minimal_capability(authority={"resources": ["input.text"], "effects": []})
+    with pytest.raises(InvalidInput, match="top-level ResourceRef"):
+        validate_capability_document(doc)
+
+
+def test_collection_selector_is_rejected_at_load() -> None:
+    with pytest.raises(InvalidInput, match="top-level ResourceRef"):
+        validate_capability_document(_batch_capability())
+    starred = _batch_capability()
+    starred["authority"] = {"resources": ["input.resources.*"], "effects": ["read"]}
+    with pytest.raises(InvalidInput, match="nested objects and collections"):
+        validate_capability_document(starred)
+
+
+def test_dotted_resource_ref_property_is_rejected_at_load() -> None:
+    dotted = _minimal_capability(
+        id="blob.dotted",
+        input={
+            "type": "object",
+            "properties": {"resource.ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource.ref"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.resource.ref"], "effects": []},
+    )
+    with pytest.raises(InvalidInput, match="dotted"):
+        validate_capability_document(dotted)
+    unnamed = _minimal_capability(
+        id="blob.dotted",
+        input={
+            "type": "object",
+            "properties": {"resource.ref": {"$ref": "#/$defs/ResourceRef"}},
+            "required": ["resource.ref"],
+            "additionalProperties": False,
+        },
+    )
+    with pytest.raises(InvalidInput, match="dotted"):
+        validate_capability_document(unnamed)
+
+
+def test_nested_selector_is_rejected_at_load() -> None:
+    nested = _minimal_capability(
+        id="blob.wrapped",
+        input={
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                    "required": ["resource"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["item"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.item.resource"], "effects": []},
+    )
+    with pytest.raises(InvalidInput, match="nested objects and collections"):
+        validate_capability_document(nested)
+
+
+def test_missing_top_level_ref_is_invalid_input(fabric: Fabric) -> None:
+    result = fabric.invoke("operator", "blob.read", {})
+    assert not result.ok
+    assert result.error.code == "INVALID_INPUT"
+
+
+def test_scalar_selector_still_works_for_blob_read(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    result = fabric.invoke("operator", "blob.read", {"resource": notes})
+    assert result.ok
+    missing = fabric.invoke("operator", "blob.replace", {"text": "nope"})
+    assert not missing.ok
+    assert missing.error.code == "INVALID_INPUT"
