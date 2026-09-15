@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agentfabric.errors import InvalidInput
+from agentfabric.errors import InvalidCatalogue, InvalidInput
 from agentfabric.types import CAPABILITY_ID_PATTERN, KNOWN_EFFECTS, REF_PATTERN, Capability
 
 
@@ -187,6 +187,15 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
         raise InvalidInput("authority.resources and authority.effects must be lists")
     if any(e not in KNOWN_EFFECTS for e in authority["effects"]):
         raise InvalidInput("authority.effects must be known effects")
+    if len(effects) != len(set(effects)):
+        raise InvalidCatalogue("effects must not contain duplicates")
+    if len(authority["effects"]) != len(set(authority["effects"])):
+        raise InvalidCatalogue("authority.effects must not contain duplicates")
+    if set(effects) != set(authority["effects"]):
+        raise InvalidCatalogue(
+            f"{cap_id}: effects {list(effects)} must equal authority.effects "
+            f"{list(authority['effects'])}"
+        )
     depends = doc.get("depends_on")
     if not isinstance(depends, list) or any(not isinstance(d, str) for d in depends):
         raise InvalidInput("depends_on must be a list of capability ids")

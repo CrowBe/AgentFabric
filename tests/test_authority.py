@@ -119,3 +119,113 @@ def test_replace_is_resource_scoped(fabric: Fabric) -> None:
     assert Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8") == "edited notes"
     assert Path(fabric.resources.get(other["ref"]).locator).read_text(encoding="utf-8") == "other"
 
+
+def test_unauthorized_existing_and_unknown_refs_are_indistinguishable(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output
+    notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
+    existing = fabric.invoke("guest", "blob.replace", {"resource": notes, "text": "no"})
+    unknown = fabric.invoke(
+        "guest",
+        "blob.replace",
+        {"resource": {"ref": "rf_deadbeefdead", "kind": "blob"}, "text": "no"},
+    )
+    assert not existing.ok and not unknown.ok
+    assert existing.error.code == "DENIED"
+    assert unknown.error.code == "DENIED"
+
+
+def test_malformed_ref_is_invalid_before_denied(fabric: Fabric) -> None:
+    result = fabric.invoke(
+        "guest",
+        "blob.replace",
+        {"resource": {"ref": "not-a-ref", "kind": "blob"}, "text": "no"},
+    )
+    assert not result.ok
+    assert result.error.code == "INVALID_REF"
+
+
+def test_wildcard_grant_still_distinguishes_unknown_resources(fabric: Fabric) -> None:
+    result = fabric.invoke(
+        "guest",
+        "blob.read",
+        {"resource": {"ref": "rf_deadbeefdead", "kind": "blob"}},
+    )
+    assert not result.ok
+    assert result.error.code == "UNKNOWN_RESOURCE"
+
+
+def test_resource_scoped_grant_does_not_oracle_unknown_refs(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output
+    notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
+    other = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "other.md", "text": "other"},
+    ).output["resource"]
+
+    fabric.add_principal("editor")
+    fabric.authority.add(
+        principal="editor",
+        capability="blob.replace",
+        resource=notes["ref"],
+        effects=["write"],
+    )
+
+    ok = fabric.invoke("editor", "blob.replace", {"resource": notes, "text": "scoped edit"})
+    assert ok.ok
+    other_existing = fabric.invoke("editor", "blob.replace", {"resource": other, "text": "nope"})
+    unknown = fabric.invoke(
+        "editor",
+        "blob.replace",
+        {"resource": {"ref": "rf_deadbeefdead", "kind": "blob"}, "text": "nope"},
+    )
+    assert not other_existing.ok and not unknown.ok
+    assert other_existing.error.code == "DENIED"
+    assert unknown.error.code == "DENIED"
+
+    wrong_kind = fabric.invoke(
+        "editor",
+        "blob.replace",
+        {"resource": {"ref": notes["ref"], "kind": "journal"}, "text": "nope"},
+    )
+    assert not wrong_kind.ok
+    assert wrong_kind.error.code == "KIND_MISMATCH"
+
+
+def test_authorized_caller_keeps_unknown_and_kind_diagnostics(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output
+    journal = next(
+        item["resource"] for item in discovered["resources"] if item["resource"]["kind"] == "journal"
+    )
+    unknown = fabric.invoke(
+        "operator",
+        "blob.read",
+        {"resource": {"ref": "rf_deadbeefdead", "kind": "blob"}},
+    )
+    assert not unknown.ok
+    assert unknown.error.code == "UNKNOWN_RESOURCE"
+    mismatch = fabric.invoke(
+        "operator",
+        "blob.replace",
+        {"resource": journal, "text": "nope"},
+    )
+    assert not mismatch.ok
+    assert mismatch.error.code == "KIND_MISMATCH"
+
+
+def test_read_only_grant_cannot_authorize_write_capability(fabric: Fabric) -> None:
+    discovered = fabric.invoke("operator", "workspace.discover", {}).output
+    notes = next(item["resource"] for item in discovered["resources"] if item["label"] == "notes.md")
+    fabric.add_principal("reader")
+    fabric.authority.add(
+        principal="reader",
+        capability="blob.replace",
+        resource="*",
+        effects=["read"],
+    )
+    original = Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8")
+    denied = fabric.invoke("reader", "blob.replace", {"resource": notes, "text": "nope"})
+    assert not denied.ok
+    assert denied.error.code == "DENIED"
+    assert Path(fabric.resources.get(notes["ref"]).locator).read_text(encoding="utf-8") == original
+

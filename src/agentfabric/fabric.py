@@ -16,12 +16,14 @@ from agentfabric.catalogue import (
     validate_dependency_graph,
 )
 from agentfabric.errors import (
+    DependencyBlocked,
     DependencyFailed,
     FabricError,
     InvalidInput,
     InvalidRef,
     KindMismatch,
     ResolverError,
+    ResolverUnavailable,
     UndeclaredDependency,
     UnknownCapability,
     UnknownResource,
@@ -179,9 +181,10 @@ class Fabric:
         self.resources = ResourceRegistry(self.home / "resources.json", self.workspace)
         self.authority = Authority(self.home / "grants.json", self.principals)
         self.audit = AuditLog(self.home / "audit.jsonl")
-        # Process-local only. Persistent replay is deferred until an effectful
-        # idempotent capability needs it. The CLI must not advertise this key.
-        self._idempotency: dict[str, Result] = {}
+        # Replay caches are deferred. `idempotent` on a capability document is a
+        # semantic property of the operation, not a promise that this runtime
+        # (or any current binding) maintains a key. The CLI and MCP surfaces do
+        # not accept an idempotency key.
         self._resolution = read_json(self.home / "resolution.json", {})
         self._binding_errors: dict[str, str] = {}
         self._bindings = self._load_bindings()
@@ -223,7 +226,7 @@ class Fabric:
                         "id": "operator",
                         "privileges": ["inspect", "crystallise", "fallback"],
                     },
-                    {"id": "guest", "privileges": ["inspect"]},
+                    {"id": "guest", "privileges": []},
                 ]
             },
         )
@@ -407,7 +410,6 @@ class Fabric:
         capability_id: str,
         input_value: dict[str, Any] | None = None,
         *,
-        idempotency_key: str | None = None,
         nested: bool = False,
     ) -> Result:
         invocation_id = new_invocation_id()
@@ -419,7 +421,6 @@ class Fabric:
                 capability_id,
                 payload,
                 invocation_id=invocation_id,
-                idempotency_key=idempotency_key,
             )
         except FabricError as exc:
             result = Result(
@@ -443,12 +444,18 @@ class Fabric:
                 nested=nested,
             )
         )
-        if not nested and not result.ok and result.error and result.error.code == "UNRESOLVED":
+        if not nested and not result.ok and result.error and result.error.code in {
+            "UNRESOLVED",
+            "RESOLVER_UNAVAILABLE",
+            "DEPENDENCY_BLOCKED",
+        }:
             from agentfabric.notice import record as record_opportunity
 
             view = self.resolution_of(capability_id) if capability_id in self.capabilities else None
             if view is not None and view.status == "unavailable":
                 summary = f"{capability_id} resolver is missing or broken"
+            elif view is not None and view.status == "blocked":
+                summary = f"{capability_id} is blocked on unresolved or unavailable dependencies"
             else:
                 summary = f"{capability_id} is in the catalogue but has no resolver"
             record_opportunity(
@@ -466,32 +473,22 @@ class Fabric:
         input_value: dict[str, Any],
         *,
         invocation_id: str,
-        idempotency_key: str | None,
     ) -> Result:
         cap = self.capability(capability_id)
         if not isinstance(input_value, dict):
             raise InvalidInput("input must be an object")
         typed_input = validate_against(cap.input, input_value)
         refs = extract_resource_refs(cap, typed_input)
+        resource_keys = [item["ref"] for item in refs] or [None]
+        effects = list(cap.authority.get("effects", cap.effects))
+        # Authority is evaluated against the caller-supplied ref id before
+        # existence/kind. Unauthorized callers must not learn whether a
+        # well-formed handle was issued.
+        for resource_key in resource_keys:
+            self.authority.allow(principal, capability_id, resource_key, effects)
         for ref_dict in refs:
             ref = ResourceRef.from_dict(ref_dict)
             self.resources.require(ref)
-        resource_keys = [item["ref"] for item in refs] or [None]
-        effects = list(cap.authority.get("effects", cap.effects))
-        for resource_key in resource_keys:
-            self.authority.allow(principal, capability_id, resource_key, effects)
-
-        if cap.idempotent and idempotency_key:
-            cache_key = f"{principal}:{capability_id}:{idempotency_key}"
-            cached = self._idempotency.get(cache_key)
-            if cached is not None:
-                return Result(
-                    ok=cached.ok,
-                    capability=capability_id,
-                    invocation_id=invocation_id,
-                    output=cached.output,
-                    error=cached.error,
-                )
 
         view = self.resolution_of(capability_id)
         if view.status == "unresolved":
@@ -499,7 +496,7 @@ class Fabric:
                 f"capability {capability_id} has no resolver; crystallise one to make it available"
             )
         if view.status == "unavailable":
-            raise Unresolved(
+            raise ResolverUnavailable(
                 f"capability {capability_id} resolver is unavailable: {view.detail}"
             )
         if view.status == "blocked":
@@ -508,7 +505,7 @@ class Fabric:
                 for dep in cap.depends_on
                 if self.resolution_of(dep).status != "resolved"
             ]
-            raise Unresolved(
+            raise DependencyBlocked(
                 f"capability {capability_id} is blocked on unresolved dependencies: {missing}"
             )
         binding = self._bindings[capability_id]
@@ -533,8 +530,6 @@ class Fabric:
             invocation_id=invocation_id,
             output=typed_output,
         )
-        if cap.idempotent and idempotency_key:
-            self._idempotency[f"{principal}:{capability_id}:{idempotency_key}"] = result
         return result
 
     def crystallise(
@@ -631,7 +626,7 @@ class Fabric:
             "note": "fallback.exec is a harness escape hatch, not an AgentSOP capability",
         }
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, viewer: str | None = None) -> dict[str, Any]:
         capabilities = [self.resolution_of(cap_id).__dict__ for cap_id in sorted(self.capabilities)]
         from agentfabric.notice import open_opportunities
 
@@ -656,6 +651,13 @@ class Fabric:
                 }
                 for cap_id in self.catalogue_collisions
             ]
+        invocations = self.audit.recent(50)
+        if viewer is not None:
+            principal = self.authority.require_principal(viewer)
+            # crystallise marks control-plane ownership. Inspect without it
+            # still sees capability status, but not other principals' payloads.
+            if not principal.has_privilege("crystallise"):
+                invocations = [_invocation_for_viewer(item, viewer) for item in invocations]
         return {
             "home": str(self.home),
             "agentsop": "0.1",
@@ -675,7 +677,7 @@ class Fabric:
             ],
             "grants": [grant.__dict__ for grant in self.authority.grants()],
             "resources": [record.public_view() for record in self.resources.all()],
-            "invocations": self.audit.recent(50),
+            "invocations": invocations,
             "opportunities": open_opportunities(self.home, resolved=resolved),
         }
 
@@ -696,3 +698,13 @@ def default_home() -> Path:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def _invocation_for_viewer(item: dict[str, Any], viewer: str) -> dict[str, Any]:
+    """Audit payloads are protected. Own invocations stay intact; others redact."""
+    if item.get("principal") == viewer:
+        return item
+    redacted = dict(item)
+    redacted["input"] = {"redacted": True}
+    redacted["output_preview"] = {"redacted": True}
+    return redacted

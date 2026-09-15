@@ -100,7 +100,7 @@ def harvest_audit(home: Path, invocations: list[dict[str, Any]]) -> list[dict[st
     created: list[dict[str, Any]] = []
     for item in invocations:
         cap = item.get("capability")
-        if item.get("error_code") == "UNRESOLVED" and cap:
+        if item.get("error_code") in {"UNRESOLVED", "RESOLVER_UNAVAILABLE", "DEPENDENCY_BLOCKED"} and cap:
             rec = record(
                 home,
                 kind="unresolved",

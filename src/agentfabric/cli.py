@@ -207,9 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_invoke.add_argument("capability")
     p_invoke.add_argument("input", nargs="?", help="JSON input object")
     p_invoke.add_argument("-p", "--principal", default="operator")
-    # Each CLI process is fresh. The runtime idempotency cache is process-local,
-    # so a flag here would advertise replay that cannot survive between commands.
-    # Long-lived bindings such as MCP may still pass idempotency_key.
+    # Bindings do not currently offer replay. `idempotent` on a capability
+    # document is a semantic property, not a cache. Neither CLI nor MCP
+    # accepts an idempotency key.
     p_invoke.set_defaults(func=cmd_invoke)
 
     p_crys = sub.add_parser("crystallise", help="Bind a Python resolver to a capability")

@@ -142,3 +142,70 @@ def test_cli_inspect_reports_invalid_catalogue(
     assert payload["code"] == "INVALID_CATALOGUE"
     assert "does.not.exist" in payload["message"]
     assert "Traceback" not in err
+
+
+def test_mismatched_effects_are_invalid_catalogue() -> None:
+    with pytest.raises(InvalidCatalogue, match="must equal authority.effects") as exc:
+        validate_capability_document(
+            {
+                "agentsop": "0.1",
+                "id": "blob.sneaky",
+                "title": "Sneaky write",
+                "description": "Declares write while authorizing read.",
+                "input": {
+                    "type": "object",
+                    "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                    "required": ["resource"],
+                    "additionalProperties": False,
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                    "required": ["resource"],
+                    "additionalProperties": False,
+                },
+                "effects": ["write"],
+                "idempotent": False,
+                "authority": {"resources": ["input.resource"], "effects": ["read"]},
+                "depends_on": [],
+            }
+        )
+    assert exc.value.code == "INVALID_CATALOGUE"
+
+
+def test_effect_order_does_not_matter() -> None:
+    cap = validate_capability_document(
+        {
+            "agentsop": "0.1",
+            "id": "blob.multi",
+            "title": "Multi",
+            "description": "Two effects, different order.",
+            "input": {"type": "object", "properties": {}, "additionalProperties": False},
+            "output": {"type": "object", "properties": {}, "additionalProperties": False},
+            "effects": ["read", "write"],
+            "idempotent": False,
+            "authority": {"resources": [], "effects": ["write", "read"]},
+            "depends_on": [],
+        }
+    )
+    assert set(cap.effects) == {"read", "write"}
+    assert set(cap.authority["effects"]) == {"read", "write"}
+
+
+def test_duplicate_effects_are_invalid_catalogue() -> None:
+    with pytest.raises(InvalidCatalogue, match="duplicates") as exc:
+        validate_capability_document(
+            {
+                "agentsop": "0.1",
+                "id": "blob.dup",
+                "title": "Dup",
+                "description": "Duplicate effects.",
+                "input": {"type": "object", "properties": {}, "additionalProperties": False},
+                "output": {"type": "object", "properties": {}, "additionalProperties": False},
+                "effects": ["read", "read"],
+                "idempotent": True,
+                "authority": {"resources": [], "effects": ["read", "read"]},
+                "depends_on": [],
+            }
+        )
+    assert exc.value.code == "INVALID_CATALOGUE"
