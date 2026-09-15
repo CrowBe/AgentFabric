@@ -16,11 +16,13 @@ from agentfabric.catalogue import (
     validate_dependency_graph,
 )
 from agentfabric.errors import (
+    DependencyBlocked,
     DependencyFailed,
     FabricError,
     InvalidInput,
     InvalidRef,
     ResolverError,
+    ResolverUnavailable,
     UndeclaredDependency,
     UnknownCapability,
     Unresolved,
@@ -441,12 +443,18 @@ class Fabric:
                 nested=nested,
             )
         )
-        if not nested and not result.ok and result.error and result.error.code == "UNRESOLVED":
+        if not nested and not result.ok and result.error and result.error.code in {
+            "UNRESOLVED",
+            "RESOLVER_UNAVAILABLE",
+            "DEPENDENCY_BLOCKED",
+        }:
             from agentfabric.notice import record as record_opportunity
 
             view = self.resolution_of(capability_id) if capability_id in self.capabilities else None
             if view is not None and view.status == "unavailable":
                 summary = f"{capability_id} resolver is missing or broken"
+            elif view is not None and view.status == "blocked":
+                summary = f"{capability_id} is blocked on unresolved or unavailable dependencies"
             else:
                 summary = f"{capability_id} is in the catalogue but has no resolver"
             record_opportunity(
@@ -497,7 +505,7 @@ class Fabric:
                 f"capability {capability_id} has no resolver; crystallise one to make it available"
             )
         if view.status == "unavailable":
-            raise Unresolved(
+            raise ResolverUnavailable(
                 f"capability {capability_id} resolver is unavailable: {view.detail}"
             )
         if view.status == "blocked":
@@ -506,7 +514,7 @@ class Fabric:
                 for dep in cap.depends_on
                 if self.resolution_of(dep).status != "resolved"
             ]
-            raise Unresolved(
+            raise DependencyBlocked(
                 f"capability {capability_id} is blocked on unresolved dependencies: {missing}"
             )
         binding = self._bindings[capability_id]

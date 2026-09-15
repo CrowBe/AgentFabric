@@ -147,7 +147,9 @@ Every invocation yields one Result:
 | Code | Meaning |
 | --- | --- |
 | `UNKNOWN_CAPABILITY` | No such capability document. |
-| `UNRESOLVED` | Capability exists; no resolver is bound. |
+| `UNRESOLVED` | Capability exists; no resolver is bound. Maps from discovery status `unresolved`. |
+| `RESOLVER_UNAVAILABLE` | A previously bound resolver is missing or broken. Maps from discovery status `unavailable`. Distinct from `UNRESOLVED`: the name was crystallised, but the binding cannot currently run. |
+| `DEPENDENCY_BLOCKED` | The capability has a resolver, but a `depends_on` entry is not `resolved`. Maps from discovery status `blocked`. Distinct from `DEPENDENCY_FAILED`, which is an inner invocation that ran and failed. |
 | `DENIED` | Principal lacks a matching grant. |
 | `UNKNOWN_RESOURCE` | ResourceRef is not one this fabric issued. |
 | `INVALID_INPUT` | Input failed the capability schema. |
@@ -164,6 +166,17 @@ These codes are part of the contract. Messages are not.
 ## Resolution and crystallisation
 
 A capability may be present in the catalogue and still be **unresolved**. That is a valid, useful state: the semantic name exists before anyone has crystallised an implementation.
+
+Runtime resolution is a small state machine. Discovery status and invocation failure codes are aligned:
+
+| Discovery status | Invocation failure |
+| --- | --- |
+| `resolved` | (success, or a later contract error) |
+| `unresolved` | `UNRESOLVED` |
+| `unavailable` | `RESOLVER_UNAVAILABLE` |
+| `blocked` | `DEPENDENCY_BLOCKED` |
+
+Callers must not distinguish these states from `message` text. Messages are not part of the contract.
 
 Crystallisation is the act of binding ordinary code as a resolver:
 
