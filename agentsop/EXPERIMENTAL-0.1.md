@@ -86,7 +86,16 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`input` / `output`** — JSON Schema objects. 0.1 uses a small subset: `object`, `string`, `integer`, `array`, `boolean`, `required`, `additionalProperties`, `enum`, and `$ref` to `ResourceRef`.
 - **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
 - **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
-- **`authority.resources`** — input paths that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
+- **`authority.resources`** — selectors for ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
+
+  0.1 selector grammar (cardinality is “every matched node”):
+
+  - Must start with `input.`
+  - Remaining segments are object property names, or `*` meaning every item of an array
+  - Examples: `input.resource` (one top-level scalar), `input.wrapper.resource` (nested), `input.resources.*` (collection)
+  - The live input schema is checked at catalogue load: every selector MUST target a `$ref: #/$defs/ResourceRef` node. A document that points at an array or an unrelated field is rejected rather than loading with inexecutable authority.
+
+  At invocation the runtime extracts every matching ResourceRef and checks existence, kind, and grants on each before the resolver runs.
 - **`authority.effects`** — effects that must be granted. Usually the same as `effects`.
 - **`depends_on`** — capability ids a resolver may invoke. Nested `ctx.invoke` of any other id is a contract violation. Composition reuses resolvers; it does not widen authority or mint references. Every listed id must exist in the same catalogue, and the graph must be acyclic.
 

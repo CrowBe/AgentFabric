@@ -179,6 +179,8 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
         raise InvalidInput(f"capability has unexpected fields: {sorted(extra)}")
     assert_supported_schema(doc["input"], path="input")
     assert_supported_schema(doc["output"], path="output")
+    for pointer in authority["resources"]:
+        assert_authority_selector(pointer, doc["input"])
     return Capability(
         agentsop="0.1",
         id=cap_id,
@@ -197,18 +199,73 @@ def validate_capability_document(doc: dict[str, Any], *, source: str = "") -> Ca
     )
 
 
+SELECTOR_PROPERTY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def parse_authority_selector(pointer: str) -> list[str]:
+    if not isinstance(pointer, str) or not pointer.startswith("input."):
+        raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
+    rest = pointer[len("input.") :]
+    if not rest:
+        raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
+    parts = rest.split(".")
+    for part in parts:
+        if part == "*":
+            continue
+        if SELECTOR_PROPERTY.match(part) is None:
+            raise InvalidInput(f"unsupported authority resource selector: {pointer!r}")
+    return parts
+
+
+def assert_authority_selector(pointer: str, input_schema: dict[str, Any]) -> None:
+    """Reject selectors that do not target a ResourceRef-shaped schema node."""
+    parts = parse_authority_selector(pointer)
+    current: Any = input_schema
+    path = "input"
+    for part in parts:
+        if part == "*":
+            if not isinstance(current, dict) or current.get("type") != "array":
+                raise InvalidInput(f"{pointer}: '*' requires an array at {path}")
+            current = current.get("items")
+            path = f"{path}.*"
+            continue
+        if not isinstance(current, dict) or current.get("type") != "object":
+            raise InvalidInput(f"{pointer}: {path} is not an object")
+        props = current.get("properties")
+        if not isinstance(props, dict) or part not in props:
+            raise InvalidInput(f"{pointer}: {path} has no property {part!r}")
+        current = props[part]
+        path = f"{path}.{part}"
+    if not isinstance(current, dict) or current.get("$ref") != RESOURCE_REF_DEF:
+        raise InvalidInput(f"{pointer} does not target a ResourceRef schema node")
+
+
 def extract_resource_refs(capability: Capability, input_value: dict[str, Any]) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
     for pointer in capability.authority.get("resources", []):
-        if not pointer.startswith("input."):
-            raise InvalidInput(f"unsupported authority resource pointer: {pointer}")
-        key = pointer[len("input.") :]
-        if key not in input_value:
-            raise InvalidInput(f"{pointer} is missing")
+        parts = parse_authority_selector(pointer)
+        refs.extend(_extract_refs(input_value, parts, path="input"))
+    return refs
+
+
+def _extract_refs(value: Any, parts: list[str], *, path: str) -> list[dict[str, str]]:
+    if not parts:
         from agentfabric.types import ResourceRef
 
-        refs.append(ResourceRef.from_dict(input_value[key]).to_dict())
-    return refs
+        return [ResourceRef.from_dict(value).to_dict()]
+    head, *tail = parts
+    if head == "*":
+        if not isinstance(value, list):
+            raise InvalidInput(f"{path} must be an array")
+        refs: list[dict[str, str]] = []
+        for i, item in enumerate(value):
+            refs.extend(_extract_refs(item, tail, path=f"{path}[{i}]"))
+        return refs
+    if not isinstance(value, dict):
+        raise InvalidInput(f"{path} must be an object")
+    if head not in value:
+        raise InvalidInput(f"{path}.{head} is missing")
+    return _extract_refs(value[head], tail, path=f"{path}.{head}")
 
 
 def looks_like_ref_id(value: str) -> bool:

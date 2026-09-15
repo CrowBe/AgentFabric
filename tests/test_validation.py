@@ -251,3 +251,166 @@ def resolve(ctx, input):
     assert result.error.message.startswith("blob.read failed: UNKNOWN_RESOURCE:")
     assert "compose.mid failed" not in result.error.message
     assert "DEPENDENCY_FAILED" not in result.error.message
+
+
+def _batch_capability(**overrides: Any) -> dict[str, Any]:
+    doc = {
+        "agentsop": "0.1",
+        "id": "blob.batch_read",
+        "title": "Batch read",
+        "description": "Read several blobs.",
+        "input": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/ResourceRef"},
+                }
+            },
+            "required": ["resources"],
+            "additionalProperties": False,
+        },
+        "output": {
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        "effects": ["read"],
+        "idempotent": True,
+        "authority": {"resources": ["input.resources.*"], "effects": ["read"]},
+        "depends_on": [],
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_collection_selector_without_star_is_rejected_at_load() -> None:
+    doc = _batch_capability()
+    doc["authority"] = {"resources": ["input.resources"], "effects": ["read"]}
+    with pytest.raises(InvalidInput, match="ResourceRef"):
+        validate_capability_document(doc)
+
+
+def test_nested_and_collection_selectors_are_accepted() -> None:
+    nested = _minimal_capability(
+        id="blob.wrapped",
+        input={
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                    "required": ["resource"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["item"],
+            "additionalProperties": False,
+        },
+        authority={"resources": ["input.item.resource"], "effects": []},
+    )
+    validate_capability_document(nested)
+    validate_capability_document(_batch_capability())
+
+
+def test_missing_authority_target_is_invalid_input(fabric: Fabric) -> None:
+    fabric.capabilities["blob.batch_read"] = validate_capability_document(_batch_capability())
+    fabric.crystallise(
+        "operator",
+        "blob.batch_read",
+        """
+def resolve(ctx, input):
+    return {"count": len(input["resources"])}
+""",
+    )
+    result = fabric.invoke("operator", "blob.batch_read", {})
+    assert not result.ok
+    assert result.error.code == "INVALID_INPUT"
+
+
+def test_collection_refs_are_authorized_individually(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    other = fabric.invoke(
+        "operator",
+        "blob.create",
+        {"label": "other.md", "text": "other"},
+    ).output["resource"]
+    fabric.capabilities["blob.batch_read"] = validate_capability_document(_batch_capability())
+    fabric.crystallise(
+        "operator",
+        "blob.batch_read",
+        """
+def resolve(ctx, input):
+    return {"count": len(input["resources"])}
+""",
+    )
+    fabric.add_principal("reader")
+    fabric.authority.add(
+        principal="reader",
+        capability="blob.batch_read",
+        resource=notes["ref"],
+        effects=["read"],
+    )
+    ok = fabric.invoke("reader", "blob.batch_read", {"resources": [notes]})
+    assert ok.ok
+    assert ok.output["count"] == 1
+    denied = fabric.invoke("reader", "blob.batch_read", {"resources": [notes, other]})
+    assert not denied.ok
+    assert denied.error.code == "DENIED"
+    unknown = fabric.invoke(
+        "operator",
+        "blob.batch_read",
+        {"resources": [notes, {"ref": "rf_deadbeefdead", "kind": "blob"}]},
+    )
+    assert not unknown.ok
+    assert unknown.error.code == "UNKNOWN_RESOURCE"
+
+
+def test_nested_selector_extracts_and_checks_the_ref(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    fabric.capabilities["blob.wrapped"] = validate_capability_document(
+        _minimal_capability(
+            id="blob.wrapped",
+            input={
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "object",
+                        "properties": {"resource": {"$ref": "#/$defs/ResourceRef"}},
+                        "required": ["resource"],
+                        "additionalProperties": False,
+                    }
+                },
+                "required": ["item"],
+                "additionalProperties": False,
+            },
+            output={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+            effects=["read"],
+            authority={"resources": ["input.item.resource"], "effects": ["read"]},
+        )
+    )
+    fabric.crystallise(
+        "operator",
+        "blob.wrapped",
+        """
+def resolve(ctx, input):
+    return {"ok": True}
+""",
+    )
+    ok = fabric.invoke("operator", "blob.wrapped", {"item": {"resource": notes}})
+    assert ok.ok
+    missing = fabric.invoke("operator", "blob.wrapped", {"item": {}})
+    assert not missing.ok
+    assert missing.error.code == "INVALID_INPUT"
+
+
+def test_scalar_selector_still_works_for_blob_read(fabric: Fabric) -> None:
+    notes = _notes_resource(fabric)
+    result = fabric.invoke("operator", "blob.read", {"resource": notes})
+    assert result.ok
