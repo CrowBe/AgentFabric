@@ -319,3 +319,15 @@ def test_mcp_negative_content_length_then_recovers(fabric: Fabric) -> None:
     assert messages[0]["error"]["code"] == -32700
     assert messages[1]["id"] == 13
     assert messages[1]["result"] == {}
+
+
+def test_mcp_large_framed_request_then_recovers(fabric: Fabric) -> None:
+    """Bodies larger than 1 MiB remain valid; the next framed request must still parse."""
+    large = {"jsonrpc": "2.0", "id": 14, "method": "ping", "params": {"note": "x" * 1_048_577}}
+    ping = {"jsonrpc": "2.0", "id": 15, "method": "ping"}
+    stdin = io.BytesIO(_frame(large) + _frame(ping))
+    stdout = io.BytesIO()
+    serve(fabric, "operator", stdin=stdin, stdout=stdout)
+    messages = _parse_framed(stdout.getvalue())
+    assert [item["id"] for item in messages] == [14, 15]
+    assert all(item["result"] == {} for item in messages)

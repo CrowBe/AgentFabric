@@ -235,12 +235,17 @@ def _decode_line(raw: Any) -> str:
     return str(raw)
 
 
-MAX_FRAMED_BODY_BYTES = 1_048_576
-
-
 def _framed_content_length(header: str) -> int:
+    """Parse Content-Length as a non-negative byte count.
+
+    Negative lengths are rejected before any body read: ``read(-1)`` drains the
+    remaining stream and prevents later-valid-request recovery. MCP and
+    AgentSOP do not define a framed-body size cap, so large but otherwise
+    valid requests (for example a large ``fabric_crystallise`` source) are
+    read in full rather than rejected in a way that desynchronizes the stream.
+    """
     length = int(header.split(":", 1)[1].strip())
-    if length < 0 or length > MAX_FRAMED_BODY_BYTES:
+    if length < 0:
         raise ValueError("invalid Content-Length")
     return length
 
