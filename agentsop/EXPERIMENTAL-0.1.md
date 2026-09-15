@@ -41,6 +41,16 @@ resolver              →  disposable
 
 Knowing a locator is not possessing a ResourceRef. Possessing a ResourceRef is not having authority to act on it. Discovery, reference, and authority are distinct.
 
+### Failure precedence
+
+ResourceRef validation and authorization run in this order. Earlier codes win:
+
+1. **`INVALID_REF`** — the value is not a well-formed public ResourceRef (wrong shape, extra fields such as locators, or a `ref` that is not `rf_` plus lowercase alphanumerics). This is a public-shape check. It does not consult the fabric's issued-handle set.
+2. **`DENIED`** — the Principal has no matching grant for this Capability, these effects, and the *supplied* ref id (`*` grants match any supplied id). Existence is not consulted.
+3. **`UNKNOWN_RESOURCE`** / **`KIND_MISMATCH`** — only after a matching grant. Authorized callers get useful diagnostics; unauthorized existing and unknown refs are indistinguishable (`DENIED`).
+
+A wildcard resource grant (`resource: "*"`) is authority that permits the existence distinction. A resource-scoped grant is not: an ungranted well-formed id, whether issued or not, is `DENIED`.
+
 ---
 
 ## Capability document
@@ -85,7 +95,7 @@ A capability is a JSON document matching `schema/capability.schema.json`.
 - **`id`** — stable name, dotted, lowercase. Example: `blob.read`.
 - **`input` / `output`** — JSON Schema objects. 0.1 uses a small subset: `object`, `string`, `integer`, `array`, `boolean`, `required`, `additionalProperties`, `enum`, and `$ref` to `ResourceRef`.
 - **`effects`** — declared consequences from the closed 0.1 vocabulary. Empty for pure transformations.
-- **`idempotent`** — if true, a caller may supply an `idempotency_key` and a runtime may replay a prior Result.
+- **`idempotent`** — semantic property of the operation: repeating equivalent typed input is expected to have the same kind of result without additional caller-visible effects. It is **not** a promise that a binding maintains a replay cache. 0.1 does not accept an `idempotency_key` on CLI, MCP, or `Fabric.invoke`. Unexpected keys are rejected rather than ignored. Persistent replay, canonical request digests, and effectful retry receipts are deferred until an effectful idempotent capability creates a concrete need.
 - **`authority.resources`** — top-level input fields that are ResourceRefs the caller must be allowed to act on. Empty when the operation does not consume a reference (discovery, creation, pure data).
 
   0.1 supports only a top-level scalar selector: `input.` plus a property name that does **not** contain `.` (`input.resource`, `input.resource-ref`). Hyphens are fine; `.` is reserved, and 0.1 has no escaping syntax to name a key such as `resource.ref`. Catalogue validation rejects nested/collection selectors (`input.wrapper.resource`, `input.resources.*`) and ResourceRef properties whose names contain `.`. JSON Pointer, wildcards, and batch authorization are a later contract revision, driven by a real capability.
