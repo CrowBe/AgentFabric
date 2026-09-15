@@ -66,7 +66,7 @@
         "resources": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Authority selectors over input ResourceRefs. Dotted paths starting with input., with * for every array item (e.g. input.resource, input.resources.*, input.item.resource). Each selector must target a ResourceRef schema node."
+          "description": "Top-level input fields that are ResourceRefs, e.g. input.resource. Nested objects and collections are not supported in 0.1 and are rejected at catalogue load."
         },
         "effects": {
           "type": "array",
