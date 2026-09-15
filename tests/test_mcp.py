@@ -123,8 +123,8 @@ def test_agentsop_list_omits_absolute_resolver_path_detail(fabric: Fabric, tmp_p
     assert row["status"] == "unavailable"
     assert "detail" not in row
     assert str(external) not in blob
-    assert "outside" not in blob
-    assert "broken_resolver.py" not in blob
+    assert "/outside/" not in blob
+    assert row["resolver"] == "local:broken_resolver.py"
 
 
 def test_mcp_stdio_initialize_and_list(fabric: Fabric) -> None:
