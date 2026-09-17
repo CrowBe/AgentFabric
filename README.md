@@ -43,7 +43,7 @@ Contracts are durable. Resolvers are disposable. Resolvers in this MVP are trust
 | **Binding** | CLI + [`src/agentfabric/bindings/mcp.py`](src/agentfabric/bindings/mcp.py) | How an existing agent harness talks to the Fabric. Not part of AgentSOP. |
 | **Skills** | [`.agents/skills/agentfabric/`](.agents/skills/agentfabric/) | Namespaced harness skills. `/set-up` is the clone-path command. `/extend-library` and `notice-gap` grow the catalogue. `/sync-upstream` reconciles a locally evolved Fabric. Not part of AgentSOP. |
 | **Hooks** | [`.cursor/hooks.json`](.cursor/hooks.json) | Cursor harness adapter: observe fallback/shell and remind the agent to crystallise. Not part of AgentSOP; do not block the escape hatch. |
-| **Package split plan** | [`docs/PACKAGE-SPLIT.md`](docs/PACKAGE-SPLIT.md) | Planned boundary between the `agentsop` contract package and the `agentfabric` runtime package, and what Weave needs from the runtime. Design record, not executed. |
+| **Fold-in notice** | [`docs/PACKAGE-SPLIT.md`](docs/PACKAGE-SPLIT.md) | This runtime is moving into the Weave repository as a package, with the 0.1 contract separating out as `agentsop`. Where the plan lives, and the one change that lands here first. |
 | **Conventions** | [`agentsop/CONVENTIONS.md`](agentsop/CONVENTIONS.md) | How to add a capability without leaking locators or widening authority. Local overlay vs upstream shipping, and `agentfabric sync`. |
 
 AgentSOP does not know about MCP, shells, or Python. The MCP server is one adapter. A second harness should bind to the same capability documents.
