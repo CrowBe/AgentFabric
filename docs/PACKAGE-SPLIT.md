@@ -6,12 +6,11 @@ package boundary, not a subsystem merge: the runtime keeps its own CLI, MCP
 binding, `.fabric/` state, and tests, and stays usable by a harness that has
 never heard of Weave.
 
-The plan lives with the destination:
-
-- `ARCHITECTURE.md` §1 and §11 in Weave — package boundaries, what enforces
-  them, and the order of operations.
-- `docs/PACKAGE-SPLIT.md` in Weave — the symbol-level move map between the
-  contract package and the runtime package.
+The plan lives with the destination: `ARCHITECTURE.md` §1 in Weave holds the
+layer boundaries, what enforces them, and the fact that adopting this code is a
+decision due when there is first something real to put behind Weave's capability
+host port. Until then Weave builds against a fake host, so nothing here is
+urgent.
 
 One change lands here first, before the move, because everything else waits on
 it: `ResolverContext` exposes `locator(ref) -> Path` and `workspace -> Path`,
