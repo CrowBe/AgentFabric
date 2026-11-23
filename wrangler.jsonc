@@ -1,0 +1,9 @@
+{
+  "name": "agentfabric",
+  "main": "dist/deploy/cloudflare.js",
+  "compatibility_date": "2026-11-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "AGENTFABRIC_MODE": "remote"
+  }
+}

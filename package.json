@@ -1,0 +1,52 @@
+{
+  "name": "agentfabric",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "bin": {
+    "agentfabric": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "vite build",
+    "dev:server": "tsx src/cli/index.ts start",
+    "dev:web": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:core": "vitest run tests/core",
+    "test:server": "vitest run tests/server",
+    "test:e2e": "vitest run tests/e2e"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^2.0.1-r.1",
+    "@hono/node-server": "^2.1.11",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/core": "^2.4.0",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "@tursodatabase/database": "^0.8.4",
+    "@ui-sdk/core": "^0.1.0-beta.16",
+    "@ui-sdk/react": "^0.1.0-beta.16",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "hono": "^4.13.21",
+    "lucide-react": "^1.78.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}

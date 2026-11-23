@@ -2,3 +2,16 @@
 .env
 .env.*
 *.log
+node_modules/
+dist/
+coverage/
+.agentfabric/
+*.db
+*.db-wal
+*.db-shm
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
+*.enc
+master.key
+.wrangler/
