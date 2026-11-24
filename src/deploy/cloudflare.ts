@@ -72,19 +72,29 @@ function llmFromEnv(env: WorkerEnv): LlmAssistConfig | undefined {
  * the runtime applies its own defaults. In-memory state does not survive isolate recycling,
  * so durable deployments must inject a persistent StorageAdapter.
  */
-async function memoryDefaults(): Promise<Pick<WorkerOptions, 'storage' | 'traceStore'>> {
-  const specifier = '../storage/memory.js';
+async function memoryDefaults(): Promise<
+  Pick<WorkerOptions, 'storage' | 'traceStore' | 'secrets'>
+> {
+  const storageSpecifier = '../storage/memory.js';
+  const secretsSpecifier = '../storage/secrets.js';
+  const out: Pick<WorkerOptions, 'storage' | 'traceStore' | 'secrets'> = {};
   try {
-    const mod = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>;
+    const mod = (await import(/* @vite-ignore */ storageSpecifier)) as Record<string, unknown>;
     const Storage = mod.MemoryStorageAdapter as (new () => StorageAdapter) | undefined;
     const Trace = mod.MemoryTraceStore as (new () => TraceStore) | undefined;
-    return {
-      ...(Storage ? { storage: new Storage() } : {}),
-      ...(Trace ? { traceStore: new Trace() } : {}),
-    };
+    if (Storage) out.storage = new Storage();
+    if (Trace) out.traceStore = new Trace();
   } catch {
-    return {};
+    // Runtime falls back to its own defaults if omitted
   }
+  try {
+    const mod = (await import(/* @vite-ignore */ secretsSpecifier)) as Record<string, unknown>;
+    const Secrets = mod.InMemorySecretStore as (new () => SecretStore) | undefined;
+    if (Secrets) out.secrets = new Secrets();
+  } catch {
+    // Runtime falls back to its own defaults if omitted
+  }
+  return out;
 }
 
 /**
@@ -103,7 +113,9 @@ export function createWorker(options: WorkerOptions = {}): {
         throw new Error('AGENTFABRIC_OPERATOR_TOKEN is not configured');
       }
       const defaults =
-        options.storage || options.traceStore ? {} : await memoryDefaults();
+        options.storage && options.traceStore && options.secrets
+          ? {}
+          : await memoryDefaults();
       const publicUrl = (env.AGENTFABRIC_PUBLIC_URL ?? new URL(request.url).origin).replace(
         /\/+$/,
         '',
@@ -111,6 +123,7 @@ export function createWorker(options: WorkerOptions = {}): {
       const llm = llmFromEnv(env);
       const storage = options.storage ?? defaults.storage;
       const traceStore = options.traceStore ?? defaults.traceStore;
+      const secrets = options.secrets ?? defaults.secrets;
       const runtime = await (options.createRuntime ?? createGatewayRuntime)({
         mode: 'remote',
         homeDir: '/agentfabric',
@@ -118,7 +131,7 @@ export function createWorker(options: WorkerOptions = {}): {
         operatorToken,
         ...(storage ? { storage } : {}),
         ...(traceStore ? { traceStore } : {}),
-        ...(options.secrets ? { secrets: options.secrets } : {}),
+        ...(secrets ? { secrets } : {}),
         ...(llm ? { llm } : {}),
       });
       return { runtime, app: createApp(runtime, { staticDir: false }) };
