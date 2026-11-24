@@ -1,11 +1,15 @@
+/// <reference types="vite/client" />
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import '@ui-sdk/core/web.css';
+import './styles.css';
+import { App } from './App';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {
   createRoot(rootEl).render(
     <StrictMode>
-      <main>AgentFabric Gateway UI</main>
+      <App />
     </StrictMode>,
   );
 }
