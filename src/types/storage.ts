@@ -100,6 +100,7 @@ export interface StorageAdapter {
   listOAuthClients(): Promise<OAuthClientRecord[]>;
   getOAuthClient(clientId: string): Promise<OAuthClientRecord | null>;
   upsertOAuthClient(client: OAuthClientRecord): Promise<void>;
+  deleteOAuthClient(clientId: string): Promise<void>;
   saveOAuthCode(record: OAuthAuthorizationCodeRecord): Promise<void>;
   consumeOAuthCode(codeHash: string): Promise<OAuthAuthorizationCodeRecord | null>;
   saveOAuthRefreshToken(record: OAuthRefreshTokenRecord): Promise<void>;
@@ -107,6 +108,10 @@ export interface StorageAdapter {
     tokenHash: string,
   ): Promise<OAuthRefreshTokenRecord | null>;
   revokeOAuthRefreshToken(tokenHash: string, revokedAt: string): Promise<void>;
+  revokeOAuthRefreshTokensByClient(
+    clientId: string,
+    revokedAt: string,
+  ): Promise<void>;
 
   // Interactive Auth Handoff Tickets
   saveAuthTicket(record: AuthTicketRecord): Promise<void>;

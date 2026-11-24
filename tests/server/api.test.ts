@@ -38,10 +38,11 @@ describe('operator API authentication (fail closed)', () => {
     expect(alt.status).toBe(200);
   });
 
-  it('does not accept ?token= outside the approvals stream', async () => {
+  it('does not accept ?token= on API routes including the approvals stream', async () => {
     const h = makeHarness();
     const res = await h.call(`/api/status?token=${OPERATOR_TOKEN}`, { auth: false });
     expect(res.status).toBe(401);
+    expect((await h.call(`/api/approvals/stream?token=${OPERATOR_TOKEN}`, { auth: false })).status).toBe(401);
   });
 
   it('treats a throwing authenticator as unauthenticated', async () => {
@@ -327,7 +328,7 @@ describe('profiles and connect snippets', () => {
       'generic-mcp',
     ]);
     const all = JSON.stringify(body);
-    expect(all).toContain('ext/skills');
+    expect(all).toContain('io.modelcontextprotocol/skills');
     expect(all).toContain('io.modelcontextprotocol/events');
     expect(all).toContain('2026-07-28');
     expect(all).not.toContain(OPERATOR_TOKEN);

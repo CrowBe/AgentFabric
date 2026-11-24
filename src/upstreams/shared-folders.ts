@@ -13,7 +13,7 @@ function within(root: string, path: string) {
   return rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel);
 }
 
-const privateState = /^(master\.key|secrets\.enc|state\.db|traces\.duckdb)(?:$|[.-])/;
+const privateState = /^(master\.key|secrets\.enc|state\.db|traces\.duckdb|operator-token)(?:$|[.-])/;
 function privatePath(home: string | undefined, path: string) {
   if (!home || !within(home, path)) return false;
   return privateState.test(relative(home, path).split(sep)[0]);

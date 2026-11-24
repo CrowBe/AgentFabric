@@ -123,6 +123,18 @@ function Tokens() {
 
 function OAuthClients() {
   const clients = useResource(() => api.oauthClients(), []);
+
+  async function revoke(id: string, name: string) {
+    const yes = await ask(
+      `Revoke OAuth client ${name}?`,
+      'All access and refresh tokens issued to this client will stop working immediately.',
+      'Revoke client',
+    );
+    if (yes && (await attempt(() => api.revokeOAuthClient(id), 'OAuth client revoked'))) {
+      await clients.reload();
+    }
+  }
+
   return (
     <Card title="OAuth clients" description="Harnesses that registered themselves (for example Claude on the web). You approve each one on the consent page.">
       <LoadState resource={clients} label="OAuth clients" />
@@ -136,6 +148,19 @@ function OAuthClients() {
           { header: 'Redirect URIs', cell: (c) => c.redirectUris.map((u) => <code key={u} className="block">{u}</code>) },
           { header: 'Grants', cell: (c) => c.grantTypes.join(', ') },
           { header: 'Registered', cell: (c) => formatTime(c.createdAt) },
+          {
+            header: 'Actions',
+            cell: (c) => (
+              <Button
+                data-size="sm"
+                data-variant="destructive"
+                onClick={() => revoke(c.clientId, c.clientName)}
+                aria-label={`Revoke OAuth client ${c.clientName}`}
+              >
+                Revoke
+              </Button>
+            ),
+          },
         ]}
       />
     </Card>

@@ -151,11 +151,10 @@ describe('approvals SSE stream', () => {
     expect(listeners.size).toBe(0);
   });
 
-  it('accepts ?token= only for the stream and only with the operator token', async () => {
+  it('never accepts ?token= on the approvals stream (fail closed)', async () => {
     const { h } = streamHarness();
     const res = await h.call(`/api/approvals/stream?token=${OPERATOR_TOKEN}`, { auth: false });
-    expect(res.status).toBe(200);
-    await res.body?.cancel();
+    expect(res.status).toBe(401);
   });
 });
 

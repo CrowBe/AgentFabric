@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
@@ -33,14 +32,7 @@ import {
 } from './schemas.js';
 import { buildConnectSnippets } from './snippets.js';
 
-const SSE_PATH = '/api/approvals/stream';
 const HEARTBEAT_MS = 15_000;
-
-const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
-
-function sameSecret(candidate: string, expected: string): boolean {
-  return timingSafeEqual(digest(candidate), digest(expected));
-}
 
 async function readJson<S extends z.ZodType>(
   c: Context,
@@ -79,10 +71,6 @@ export function createOperatorGuard(runtime: GatewayRuntime): MiddlewareHandler 
       allowed = runtime.authenticateOperator(c.req.raw);
     } catch {
       allowed = false;
-    }
-    if (!allowed && c.req.method === 'GET' && c.req.path === SSE_PATH) {
-      const token = c.req.query('token');
-      allowed = Boolean(token) && sameSecret(token as string, runtime.operatorToken);
     }
     if (!allowed) {
       c.header('www-authenticate', 'Bearer realm="agentfabric-operator"');
@@ -210,6 +198,10 @@ export function createApi(runtime: GatewayRuntime): Hono {
   api.get('/oauth-clients', async (c) =>
     c.json({ clients: await runtime.listOAuthClients() }),
   );
+  api.delete('/oauth-clients/:id', async (c) => {
+    await runtime.revokeOAuthClient(c.req.param('id'));
+    return c.json({ ok: true });
+  });
 
   // Secrets are write-only: values are accepted here and never returned.
   api.get('/secrets', async (c) => c.json({ secrets: await runtime.listSecrets() }));
@@ -329,8 +321,13 @@ export function createApi(runtime: GatewayRuntime): Hono {
   // Portable, secret-free configuration
   api.get('/config/export', async (c) => c.json(await runtime.exportConfig()));
   api.post('/config/import', async (c) => {
-    const { bundle, merge } = await readJson(c, importConfigSchema);
-    return c.json(await runtime.importConfig(bundle, { merge: merge ?? true }));
+    const { bundle, merge, enableExecutables } = await readJson(c, importConfigSchema);
+    return c.json(
+      await runtime.importConfig(bundle, {
+        merge: merge ?? true,
+        ...(enableExecutables !== undefined ? { enableExecutables } : {}),
+      }),
+    );
   });
 
   api.notFound((c) =>

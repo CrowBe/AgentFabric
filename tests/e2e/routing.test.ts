@@ -67,9 +67,15 @@ it('challenges unauthenticated MCP and completes OAuth consent and S256 PKCE ove
   const wrong = await exchange(await grant(), randomBytes(32).toString('base64url'));
   expect(await json(wrong, 400)).toMatchObject({ error: 'invalid_grant' });
   const code = await grant();
-  const token = await json<{ access_token: string }>(await exchange(code, verifier));
-  expect(token).toMatchObject({ token_type: 'Bearer', scope: 'mcp' });
+  const token = await json<{ access_token: string; refresh_token: string }>(await exchange(code, verifier));
+  expect(token).toMatchObject({ token_type: 'Bearer', scope: 'mcp', refresh_token: expect.any(String) });
   expect(await json(await exchange(code, verifier), 400)).toMatchObject({ error: 'invalid_grant' });
+
+  const profileDenied = await mcpClient(gateway, undefined, 'other').request('server/discover').response;
+  expect(profileDenied.status).toBe(401);
+  expect(profileDenied.headers.get('www-authenticate')).toBe(
+    `Bearer resource_metadata="${gateway.url}/.well-known/oauth-protected-resource/mcp/other"`,
+  );
 
   await mcpClient(gateway, token.access_token, 'other').error('server/discover', {}, 'FORBIDDEN', 403);
   expect(upstream.requests).toHaveLength(before);
@@ -77,6 +83,18 @@ it('challenges unauthenticated MCP and completes OAuth consent and S256 PKCE ove
   expect(await mcp.result('server/discover')).toMatchObject({ supportedVersions: ['2026-07-28'] });
   expect(upstream.requests.length).toBeGreaterThan(before);
   expect((await mcp.tool('http_echo', { value: 'authorized' })).content).toEqual([{ type: 'text', text: 'http:authorized' }]);
+
+  await api(gateway, `/oauth-clients/${client.client_id}`, 'DELETE');
+  await mcp.error('ping', {}, 'UNAUTHORIZED', 401);
+  const refreshed = await fetch(metadata.token_endpoint, {
+    method: 'POST',
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: token.refresh_token,
+      client_id: client.client_id,
+    }),
+  });
+  expect(refreshed.status).toBe(400);
 });
 
 it('serves tools, prompts, resources, and skills from one endpoint to the installed MCP SDK', async () => {

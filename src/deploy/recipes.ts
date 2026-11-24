@@ -304,7 +304,7 @@ export const STARTER_RECIPES: readonly StarterRecipe[] = [
     description:
       'Share one bounded folder with connected harnesses over workspace:// resources. Read-only by default; the gateway never reaches outside the root.',
     kind: 'shared_folder',
-    localOnly: true,
+    localOnly: false,
     fields: [
       nameField,
       {

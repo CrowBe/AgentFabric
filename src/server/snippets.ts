@@ -134,7 +134,7 @@ export function buildConnectSnippets(input: {
       id: 'generic-mcp',
       label: 'Generic MCP 2026-07-28 + Events',
       description:
-        'Reference connection shape for any MCP client: tools, prompts, resources, skills (ext/skills), and events (io.modelcontextprotocol/events) over this one endpoint.',
+        'Reference connection shape for any MCP client: tools, prompts, resources, skills (io.modelcontextprotocol/skills), and events (io.modelcontextprotocol/events) over this one endpoint.',
       auth: 'bearer',
       language: 'json',
       target: 'Adapt to your client’s MCP server configuration',
@@ -147,7 +147,7 @@ export function buildConnectSnippets(input: {
           protocolVersion: '2026-07-28',
           extensions: {
             'io.modelcontextprotocol/events': {},
-            'ext/skills': {},
+            'io.modelcontextprotocol/skills': {},
           },
           surfaces: ['tools', 'prompts', 'resources', 'skills', 'events'],
         },
@@ -172,7 +172,7 @@ export function buildConnectSnippets(input: {
       'tools',
       'prompts',
       'resources',
-      'skills (skill:// via ext/skills)',
+      'skills (skill:// via io.modelcontextprotocol/skills)',
       'events (io.modelcontextprotocol/events)',
     ],
     localWrites: 'none',

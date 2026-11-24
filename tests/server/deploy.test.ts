@@ -211,4 +211,59 @@ describe('cloudflare worker adapter', () => {
     const mod = await import('../../src/deploy/cloudflare.js');
     expect(typeof mod.default.fetch).toBe('function');
   });
+
+  it('fails closed without durable storage unless AGENTFABRIC_ALLOW_EPHEMERAL=1, and sets CSP on UI assets', async () => {
+    const bare = createWorker();
+    const denied = await bare.fetch(new Request('https://x.dev/healthz'), env);
+    expect(denied.status).toBe(503);
+    expect(await denied.text()).toContain('AGENTFABRIC_ALLOW_EPHEMERAL');
+
+    const allowed = createWorker();
+    const assets = {
+      fetch: async () => new Response('<title>Worker UI</title>', { headers: { 'content-type': 'text/html' } }),
+    };
+    const ephEnv = { ...env, AGENTFABRIC_ALLOW_EPHEMERAL: '1', ASSETS: assets };
+    const ui = await allowed.fetch(new Request('https://x.dev/'), ephEnv);
+    expect(ui.status).toBe(200);
+    expect(ui.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(ui.headers.get('x-frame-options')).toBe('DENY');
+
+    const health = await allowed.fetch(new Request('https://x.dev/healthz'), ephEnv);
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ ok: true, mode: 'remote', version: '0.1.0' });
+  });
+
+  it('persists gateway state via Cloudflare D1StorageAdapter', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const { D1StorageAdapter } = await import('../../src/storage/d1.js');
+    const sqlite = new DatabaseSync(':memory:');
+    const wrap = (query: string, bound: unknown[] = []) => ({
+      bind: (...values: unknown[]) => wrap(query, values),
+      all: async <T = Record<string, unknown>>() => ({
+        results: sqlite.prepare(query).all(...(bound as never[])) as T[],
+      }),
+      first: async <T = Record<string, unknown>>() =>
+        (sqlite.prepare(query).get(...(bound as never[])) as T | undefined) ?? null,
+      run: async () => sqlite.prepare(query).run(...(bound as never[])),
+    });
+    const d1 = {
+      prepare: (query: string) => wrap(query),
+      batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
+    };
+    const worker = createWorker();
+    const d1Env = { ...env, DB: d1 };
+    const created = await worker.fetch(
+      new Request('https://x.dev/api/profiles', {
+        method: 'POST',
+        headers: { authorization: 'Bearer cf-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'd1-profile' }),
+      }),
+      d1Env,
+    );
+    expect(created.status).toBe(201);
+
+    const reopened = await D1StorageAdapter.open(d1);
+    expect(await reopened.getProfile('d1-profile')).toMatchObject({ name: 'd1-profile' });
+    sqlite.close();
+  });
 });

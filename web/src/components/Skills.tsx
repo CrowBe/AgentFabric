@@ -75,7 +75,7 @@ export function Skills() {
         title="Agent skills"
         description={
           <>
-            Reusable skills served over MCP as <code>skill://</code> resources (<code>ext/skills</code>). Every harness gets them
+            Reusable skills served over MCP as <code>skill://</code> resources (<code>io.modelcontextprotocol/skills</code>). Every harness gets them
             from the gateway; nothing is written into local skill folders.
           </>
         }
@@ -146,15 +146,14 @@ export function Skills() {
           </>
         }
         actions={
-          <Button data-variant="solid" disabled={remote} onClick={() => setAdding({ tab: 'recipe', recipeId: 'shared-workspace-folder' })}>
+          <Button data-variant="solid" onClick={() => setAdding({ tab: 'recipe', recipeId: 'shared-workspace-folder' })}>
             <FolderIcon aria-hidden="true" /> Share a folder
           </Button>
         }
       >
         {remote ? (
-          <Notice tone="warn">
-            This gateway runs in remote mode and never tunnels back into your local disk. Use explicit server-to-client sharing for
-            local workspace context.
+          <Notice tone="info">
+            This gateway runs in remote mode. Local CLI wrappers and stdio processes are blocked, while explicit server-side shared folders stay available.
           </Notice>
         ) : null}
         {folders.length === 0 ? <p className="empty">No folders shared.</p> : null}

@@ -110,7 +110,7 @@ describe('MCP authorization and approval', () => {
     await runtime.decideApproval(approval.id, 'denied');
     expect((await denied).error.data.code).toBe('APPROVAL_DENIED');
     const expired = await rpc(runtime, token, 'tools/call', args);
-    expect(expired.error.data).toMatchObject({ code: 'APPROVAL_TIMEOUT', approval: { status: 'expired', approvalUrl: expect.stringContaining('/approvals/') } });
+    expect(expired.error.data).toMatchObject({ code: 'APPROVAL_TIMEOUT', approval: { status: 'expired', approvalUrl: expect.stringContaining('/#/safety?approval=') } });
     const revoked = rpc(runtime, token, 'tools/call', args);
     await vi.waitFor(async () => expect(await runtime.listApprovals('pending')).toHaveLength(1));
     const [last] = await runtime.listApprovals('pending');
@@ -224,7 +224,7 @@ describe('protocol and OAuth', () => {
     const wrong = await request(runtime, token, 'ping', {}, { headers: { 'MCP-Protocol-Version': '2000-01-01' } });
     expect(wrong.status).toBe(400);
     expect((await wrong.json()).error).toMatchObject({ code: -32022, message: 'UnsupportedProtocolVersionError',
-      data: { supported: ['2026-07-28', '2025-11-25', '2025-03-26'], requested: '2000-01-01' } });
+      data: { supported: ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'], requested: '2000-01-01' } });
     for (const version of ['2025-11-25', '2025-03-26']) {
       const init = await request(runtime, token, 'initialize', { protocolVersion: version, clientInfo: { name: 'legacy' } });
       expect((await init.json()).result.protocolVersion).toBe(version);
@@ -497,13 +497,17 @@ it('excludes native gateway state from shared folders', async () => {
   const homeDir = await tmp();
   const { runtime, token } = await start({ homeDir });
   await writeFile(join(homeDir, 'master.key'), 'sealed');
+  await writeFile(join(homeDir, 'operator-token'), 'afop_secret');
   await writeFile(join(homeDir, 'public.txt'), 'shareable');
   await symlink(join(homeDir, 'master.key'), join(homeDir, 'alias.txt'));
   await runtime.createSource({ name: 'share', kind: 'shared_folder', config: {
     kind: 'shared_folder', shareName: 'state', rootPath: homeDir, readOnly: true,
   } });
-  expect((await rpc(runtime, token, 'resources/read', { uri: 'workspace://state/' })).result.contents[0].text).not.toContain('master.key');
+  const listing = (await rpc(runtime, token, 'resources/read', { uri: 'workspace://state/' })).result.contents[0].text;
+  expect(listing).not.toContain('master.key');
+  expect(listing).not.toContain('operator-token');
   expect((await rpc(runtime, token, 'resources/read', { uri: 'workspace://state/alias.txt' })).error.data.code).toBe('FORBIDDEN');
+  expect((await rpc(runtime, token, 'resources/read', { uri: 'workspace://state/operator-token' })).error.data.code).toBe('FORBIDDEN');
 });
 
 it('honors manual, on-connect, and interval refresh policies independently', async () => {

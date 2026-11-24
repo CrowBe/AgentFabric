@@ -262,6 +262,8 @@ export const api = {
   revokeToken: (id: string) => request<{ ok: true }>('DELETE', `/api/tokens/${enc(id)}`),
   oauthClients: () =>
     request<{ clients: OAuthClientRecord[] }>('GET', '/api/oauth-clients').then((r) => r.clients),
+  revokeOAuthClient: (id: string) =>
+    request<{ ok: true }>('DELETE', `/api/oauth-clients/${enc(id)}`),
 
   secrets: () => request<{ secrets: SecretMetadata[] }>('GET', '/api/secrets').then((r) => r.secrets),
   setSecret: (name: string, value: string, description?: string) =>

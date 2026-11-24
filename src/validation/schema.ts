@@ -7,25 +7,30 @@ const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: true, add
 
 export function strictSchema(schema: JsonSchemaObject): JsonSchemaObject {
   const result = structuredClone(schema);
-  function visit(node: unknown) {
+  function visit(node: unknown, inCombinator = false) {
     if (node === null || typeof node !== 'object' || Array.isArray(node)) return;
     const shape = node as JsonSchemaObject;
     const additional = shape.additionalProperties;
     const typed = additional && typeof additional === 'object' &&
       ['type', '$ref', 'enum', 'const', 'allOf', 'anyOf', 'oneOf', 'properties', 'patternProperties'].some(key => Object.hasOwn(additional, key));
-    if (shape.properties && additional !== false && !typed) shape.additionalProperties = false;
+    if (!inCombinator && shape.properties && additional !== false && !typed) shape.additionalProperties = false;
     for (const key of ['properties', 'patternProperties', 'definitions', '$defs', 'dependencies', 'dependentSchemas']) {
       const children = shape[key];
-      if (children && typeof children === 'object') for (const child of Object.values(children)) visit(child);
+      if (children && typeof children === 'object') for (const child of Object.values(children)) visit(child, false);
     }
-    for (const key of ['allOf', 'oneOf', 'anyOf', 'prefixItems', 'items', 'contains', 'additionalItems',
+    for (const key of ['allOf', 'oneOf', 'anyOf']) {
+      const child = shape[key];
+      if (Array.isArray(child)) child.forEach(branch => visit(branch, true));
+      else visit(child, true);
+    }
+    for (const key of ['prefixItems', 'items', 'contains', 'additionalItems',
       'propertyNames', 'additionalProperties', 'not', 'if', 'then', 'else']) {
       const child = shape[key];
-      if (Array.isArray(child)) child.forEach(visit);
-      else visit(child);
+      if (Array.isArray(child)) child.forEach(item => visit(item, false));
+      else visit(child, false);
     }
   }
-  visit(result);
+  visit(result, false);
   return result;
 }
 

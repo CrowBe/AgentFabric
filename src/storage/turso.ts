@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { connect, type Database } from '@tursodatabase/database';
 import { defaultProfile, RecordStorage, tables, type ConfigChange, type Criteria, type Row, type Table } from './memory.js';
@@ -17,7 +17,9 @@ export class TursoStorageAdapter extends RecordStorage {
 
   static async open(homeDir: string) {
     await mkdir(homeDir, { recursive: true, mode: 0o700 });
-    const database = await connect(join(homeDir, 'state.db'));
+    const dbPath = join(homeDir, 'state.db');
+    const database = await connect(dbPath);
+    await chmod(dbPath, 0o600).catch(() => {});
     try {
       const storage = new TursoStorageAdapter(database);
       for (const table of Object.keys(tables) as Table[]) {

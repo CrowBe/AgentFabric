@@ -373,6 +373,7 @@ export interface ClientTokenRecord {
   id: string;
   label: string;
   profileId: string;
+  clientId?: string;
   tokenPrefix: string;
   scopes: string[];
   createdAt: string;

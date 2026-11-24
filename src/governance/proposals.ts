@@ -16,6 +16,9 @@ export class Proposals {
     private readonly emit: (proposal: CapabilityProposalRecord) => Promise<unknown>) {}
 
   async create(input: unknown, profileId: string, proposedBySessionId?: string) {
+    if ((await this.storage.listProposals('pending_review')).length >= 50) {
+      throw new GatewayError('CONFLICT', 'Too many pending capability proposals; review existing proposals first');
+    }
     const { name, description, definition, kind } = parseConfig(proposalSchema, input);
     if ((definition.kind !== 'composite' && definition.kind !== 'cli_wrapper') || (kind && kind !== definition.kind)) {
       throw new GatewayError('INVALID_INPUT', 'Invalid proposal kind');

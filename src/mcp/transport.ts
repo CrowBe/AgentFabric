@@ -4,7 +4,7 @@ import { authenticateClient, challenge, type ClientIdentity } from '../auth/midd
 import { GatewayError, type SecretStore, type StorageAdapter } from '../types/index.js';
 import { capabilities, type McpGateway, serverInfo } from './gateway.js';
 
-export const supportedProtocolVersions = ['2026-07-28', '2025-11-25', '2025-03-26'];
+export const supportedProtocolVersions = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'];
 const latest = supportedProtocolVersions[0];
 const protocolKey = 'io.modelcontextprotocol/protocolVersion';
 const clientInfoKey = 'io.modelcontextprotocol/clientInfo';
@@ -48,7 +48,11 @@ function rpcGatewayError(id: RpcId | null, error: unknown, secrets: SecretStore)
     error.code === 'INVALID_INPUT' ? -32602 :
     error.code === 'FORBIDDEN' || error.code === 'CAPABILITY_DENIED' ? -32024 :
     error.code === 'CAPABILITY_NOT_FOUND' || error.code === 'NOT_FOUND' ? -32023 : -32000;
-  return errorBody(id, code, secrets.redact(error.message), {
+  let message = secrets.redact(error.message);
+  if (error.code === 'AUTH_REQUIRED' && error.authHandoff) {
+    message = `${message} Authenticate at ${error.authHandoff.authUrl}${error.authHandoff.cliCommand ? ` or run: ${error.authHandoff.cliCommand}` : ''}`;
+  }
+  return errorBody(id, code, message, {
     ...secrets.redactValue(details), code: error.code, ...(error.authHandoff ? { authHandoff: error.authHandoff } : {}),
     ...(error.approval ? { approval: secrets.redactValue(error.approval) } : {}),
   });
@@ -73,9 +77,24 @@ function catalogNotifications(filter: Record<string, unknown>) {
   ].filter(([key]) => filter[key] === true);
 }
 
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+function originAllowed(originHeader: string, publicUrl: string) {
+  try {
+    const reqOrigin = new URL(originHeader);
+    const pub = new URL(publicUrl);
+    if (reqOrigin.origin === pub.origin) return true;
+    return reqOrigin.protocol === pub.protocol && reqOrigin.port === pub.port &&
+      loopbackHosts.has(reqOrigin.hostname) && loopbackHosts.has(pub.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export class McpTransport {
   private readonly sessions = new Map<string, Session>();
   private readonly streams = new Set<() => void>();
+  private readonly activeRequests = new Map<string, AbortController>();
   private closed = false;
 
   constructor(private readonly storage: StorageAdapter, private readonly secrets: SecretStore,
@@ -156,12 +175,12 @@ export class McpTransport {
     if (this.closed) return new Response(null, { status: 503 });
     const headers = new Headers({ 'Cache-Control': 'no-store' });
     const origin = request.headers.get('origin');
-    if (origin && origin !== new URL(this.publicUrl).origin) return Response.json(errorBody(null, -32024, 'Invalid Origin'), { status: 403, headers });
+    if (origin && !originAllowed(origin, this.publicUrl)) return Response.json(errorBody(null, -32024, 'Invalid Origin'), { status: 403, headers });
     let identity: ClientIdentity;
     try { identity = await authenticateClient(request, profileName, this.storage); }
     catch (error) {
       const status = error instanceof GatewayError ? error.httpStatus : 500;
-      if (status === 401) headers.set('WWW-Authenticate', challenge(this.publicUrl));
+      if (status === 401) headers.set('WWW-Authenticate', challenge(this.publicUrl, profileName));
       return Response.json(rpcGatewayError(null, error, this.secrets), { status, headers });
     }
     const sessionId = request.headers.get('mcp-session-id') ?? undefined;
@@ -200,14 +219,22 @@ export class McpTransport {
       method = body.method;
       const params = isObject(body.params) ? body.params : {};
       const meta = isObject(params._meta) ? params._meta : {};
-      const version = negotiate(request.headers.get('mcp-protocol-version'), meta[protocolKey], session?.version,
-        method === 'initialize' ? params.protocolVersion : undefined);
+      const initRequested = method === 'initialize' && typeof params.protocolVersion === 'string'
+        ? (supportedProtocolVersions.includes(params.protocolVersion) ? params.protocolVersion : latest)
+        : undefined;
+      const version = negotiate(request.headers.get('mcp-protocol-version'), meta[protocolKey], session?.version, initRequested);
       headers.set('MCP-Protocol-Version', version);
       const modern = version === latest;
       const clientInfo = method === 'initialize' ? params.clientInfo : meta[clientInfoKey];
       const clientName = isObject(clientInfo) && typeof clientInfo.name === 'string'
         ? this.secrets.redact(clientInfo.name.slice(0, 200)) : session?.clientName;
-      if (id === null) return new Response(null, { status: 202, headers });
+      if (id === null) {
+        if (method === 'notifications/cancelled' && (typeof params.requestId === 'string' || typeof params.requestId === 'number')) {
+          const reqKey = `${identity.principal}:${sessionId ?? ''}:${String(params.requestId)}`;
+          this.activeRequests.get(reqKey)?.abort();
+        }
+        return new Response(null, { status: 202, headers });
+      }
       if (method === 'initialize') {
         for (const [key, value] of this.sessions) if (value.expires <= Date.now()) this.removeSession(key);
         const key = randomUUID();
@@ -229,8 +256,16 @@ export class McpTransport {
         const streamParams = { ...params, cursor: params.cursor ?? request.headers.get('last-event-id') };
         return this.sse(request, headers, await this.gateway.events.openStream(identity, streamParams, id), session);
       }
-      const result = await this.gateway.dispatch(method, params, identity, { profileId: identity.profile.id, sessionId, clientName, identity });
-      return Response.json(resultBody(id, result, modern, method), { headers });
+      const reqController = new AbortController();
+      const reqKey = `${identity.principal}:${sessionId ?? ''}:${String(id)}`;
+      this.activeRequests.set(reqKey, reqController);
+      const signal = AbortSignal.any([request.signal, reqController.signal]);
+      try {
+        const result = await this.gateway.dispatch(method, params, identity, { profileId: identity.profile.id, sessionId, clientName, identity, signal });
+        return Response.json(resultBody(id, result, modern, method), { headers });
+      } finally {
+        if (this.activeRequests.get(reqKey) === reqController) this.activeRequests.delete(reqKey);
+      }
     } catch (error) {
       if (error instanceof UnsupportedProtocolVersionError) {
         return Response.json(errorBody(id, error.code, 'UnsupportedProtocolVersionError', error.data), { status: 400, headers });
@@ -241,6 +276,8 @@ export class McpTransport {
 
   close() {
     this.closed = true;
+    for (const controller of this.activeRequests.values()) controller.abort();
+    this.activeRequests.clear();
     for (const close of this.streams) close();
     this.sessions.clear();
   }

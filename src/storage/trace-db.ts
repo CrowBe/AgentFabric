@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
 import type { TelemetryEventFilter, TelemetryEventRecord, TelemetrySummary, TraceStore } from '../types/index.js';
@@ -11,7 +11,9 @@ export class DuckDbTraceStore implements TraceStore {
 
   static async open(homeDir: string) {
     await mkdir(homeDir, { recursive: true, mode: 0o700 });
-    const instance = await DuckDBInstance.create(join(homeDir, 'traces.duckdb'));
+    const dbPath = join(homeDir, 'traces.duckdb');
+    const instance = await DuckDBInstance.create(dbPath);
+    await chmod(dbPath, 0o600).catch(() => {});
     let db: DuckDBConnection | undefined;
     try {
       db = await instance.connect();

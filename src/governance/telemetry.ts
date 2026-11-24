@@ -6,7 +6,8 @@ import { summarizeTraces } from '../storage/memory.js';
 const errorStatus: Record<string, TelemetryStatus> = {
   INVALID_INPUT: 'validation_error', AUTH_REQUIRED: 'auth_required', APPROVAL_DENIED: 'approval_denied',
   APPROVAL_TIMEOUT: 'approval_timeout', CAPABILITY_NOT_FOUND: 'not_found', NOT_FOUND: 'not_found',
-  FORBIDDEN: 'forbidden', CAPABILITY_DENIED: 'forbidden', REMOTE_CLI_FORBIDDEN: 'forbidden', PATH_OUTSIDE_SHARE: 'forbidden',
+  FORBIDDEN: 'forbidden', CAPABILITY_DENIED: 'forbidden', REMOTE_CLI_FORBIDDEN: 'forbidden',
+  PATH_OUTSIDE_SHARE: 'forbidden', PROPOSAL_NOT_ACTIVATED: 'forbidden',
 };
 
 function bytes(value: unknown) { return Buffer.byteLength(JSON.stringify(value) ?? ''); }

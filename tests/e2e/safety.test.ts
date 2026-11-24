@@ -40,6 +40,7 @@ it('hands credentials to the operator, stores them encrypted, and redacts secret
   expect(await stdio.calls()).toEqual([]);
   const handoff = failure.data.authHandoff as { authUrl: string };
   expect(handoff).toMatchObject({ sourceId: 'stdio', authUrl: expect.stringContaining(`${gateway.url}/auth/connect/stdio?ticket=`) });
+  expect(failure.message).toContain(handoff.authUrl);
   expect(handoff).not.toHaveProperty('cliCommand');
   const authUrl = new URL(handoff.authUrl);
   const connect = await fetch(authUrl);
@@ -183,4 +184,32 @@ it('blocks remote CLI registration and persisted CLI execution while serving bou
   }
   await mcp.error('resources/read', { uri: 'workspace://repo/too-large.txt' }, 'INVALID_INPUT');
   await mcp.error('resources/read', { uri: 'workspace://repo/private.env' }, 'FORBIDDEN');
+  await expect(api(gateway, '/sources', 'POST', {
+    id: 'remote-stdio', name: 'Remote stdio', kind: 'mcp_stdio', config: { kind: 'mcp_stdio', command: 'node', args: ['-v'] },
+  }, 403)).resolves.toMatchObject({ error: { code: 'REMOTE_CLI_FORBIDDEN' } });
+});
+
+it('expires pending approvals and aborts upstream execution if caller cancels', async () => {
+  const upstream = await httpMcp();
+  const gateway = await startGateway();
+  await addSource(gateway, httpSource(upstream.mcpUrl));
+  await api(gateway, '/policies', 'POST', { name: 'Gate HTTP echo', capabilityPattern: 'http_echo', action: 'require_approval' }, 201);
+  const token = await clientToken(gateway);
+  const mcp = mcpClient(gateway, token);
+  const { id, response } = mcp.request('tools/call', { name: 'http_echo', arguments: { value: 'cancelled' } });
+  const approval = await vi.waitFor(async () => {
+    const { approvals } = await api<{ approvals: ApprovalRequestRecord[] }>(gateway, '/approvals?status=pending');
+    expect(approvals).toHaveLength(1);
+    return approvals[0];
+  }, { timeout: 3000 });
+  await fetch(gateway.mcpUrl, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id } }),
+  });
+  const reply = await json<{ error?: { data?: { code?: string } } }>(await response);
+  expect(reply.error?.data?.code).toBe('APPROVAL_TIMEOUT');
+  expect((await api<{ approval: ApprovalRequestRecord }>(gateway, `/approvals/${approval.id}/decide`, 'POST', { decision: 'approved' }, 409)))
+    .toMatchObject({ error: { code: 'CONFLICT' } });
+  expect(upstream.calls()).toEqual([]);
 });

@@ -6,8 +6,10 @@ import { GatewayError } from '../types/index.js';
 
 interface SecretEntry extends SecretMetadata { value: string }
 
+const secretTokenPattern = /\b(?:(?:af_tok_|af_code_|af_refresh_|af_ticket_|whsec_)[\w.+=/-]+|Bearer[ \t]+(?!(?:token|header|scheme|auth|credential)\b)[\w~+./=-]{6,}|sk-(?!learn\b)[\w-]{3,}|ghp_[\w-]+)\b/gi;
+
 export function redactPatterns(input: string) {
-  return input.replace(/\b(?:(?:af_tok_|af_code_|af_refresh_|af_ticket_|whsec_)[\w.+=/-]+|Bearer[ \t]+[\w~+./=-]+|sk-[\w-]+|ghp_[\w-]+)/gi, '[REDACTED]');
+  return input.replace(secretTokenPattern, '[REDACTED]');
 }
 
 export class InMemorySecretStore implements SecretStore {
@@ -47,7 +49,7 @@ export class InMemorySecretStore implements SecretStore {
     const values = [...new Set([...this.entries.values()].map(entry => entry.value))]
       .filter(value => value.length >= 4).sort((a, b) => b.length - a.length);
     const escaped = values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const patterns = /\b(?:(?:af_tok_|af_code_|af_refresh_|af_ticket_|whsec_)[\w.+=/-]+|Bearer[ \t]+[\w~+./=-]+|sk-[\w-]+|ghp_[\w-]+)/gi;
+    const patterns = new RegExp(secretTokenPattern.source, 'gi');
     const ranges = [...input.matchAll(patterns)].map(match => [match.index, match.index + match[0].length]);
     if (escaped.length) {
       for (const match of input.matchAll(new RegExp('(?=(' + escaped.join('|') + '))', 'g'))) {

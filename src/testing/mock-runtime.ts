@@ -775,6 +775,18 @@ export function createMockRuntime(
       return [...oauthClients.values()];
     },
 
+    async revokeOAuthClient(clientId) {
+      if (!oauthClients.delete(clientId)) {
+        throw new GatewayError('NOT_FOUND', `OAuth client '${clientId}' not found`, 404);
+      }
+      const revokedAt = nowIso();
+      for (const token of tokens.values()) {
+        if (token.clientId === clientId && !token.revokedAt) {
+          token.revokedAt = revokedAt;
+        }
+      }
+    },
+
     async listSecrets(): Promise<SecretMetadata[]> {
       return [...secrets.entries()].map(([name, meta]) => ({
         name,
@@ -1007,7 +1019,11 @@ export function createMockRuntime(
         policies.clear();
       }
       for (const s of bundle.sources) {
-        await this.createSource(s);
+        const safeSource =
+          !options?.enableExecutables && (s.kind === 'cli_wrapper' || s.kind === 'mcp_stdio')
+            ? { ...s, enabled: false }
+            : s;
+        await this.createSource(safeSource);
       }
       for (const o of bundle.overlays) {
         overlays.set(o.capabilityId, o);

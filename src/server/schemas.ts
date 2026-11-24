@@ -308,6 +308,7 @@ export const bundleSchema: z.ZodType<PortableConfigBundle> = z.strictObject({
 export const importConfigSchema = z.strictObject({
   bundle: bundleSchema,
   merge: z.boolean().optional(),
+  enableExecutables: z.boolean().optional(),
 });
 
 const limit = z.coerce.number().int().min(1).max(1000);

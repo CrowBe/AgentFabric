@@ -12,7 +12,7 @@ import { Telemetry } from '../governance/telemetry.js';
 import { Events } from '../mcp/events.js';
 import { McpGateway, serverInfo, type InvocationContext } from '../mcp/gateway.js';
 import { McpTransport } from '../mcp/transport.js';
-import { defaultProfile } from '../storage/memory.js';
+import { defaultProfile, MemoryTraceStore } from '../storage/memory.js';
 import { ensureSecretFree, exportConfig, importConfig, overlaySchema, parseConfig, policySchema, profileSchema,
   validateSourceConfig } from '../storage/portability.js';
 import { EncryptedSecretStore } from '../storage/secrets.js';
@@ -42,7 +42,16 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
   let events: Events | undefined;
   let manager: UpstreamManager | undefined;
   try {
-    trace = options.traceStore ?? await (await import('../storage/trace-db.js')).DuckDbTraceStore.open(homeDir);
+    if (options.traceStore) {
+      trace = options.traceStore;
+    } else {
+      try {
+        trace = await (await import('../storage/trace-db.js')).DuckDbTraceStore.open(homeDir);
+      } catch (err) {
+        console.warn(`[agentfabric] DuckDB trace store unavailable (${err instanceof Error ? err.name : 'Error'}), falling back to in-memory trace store`);
+        trace = new MemoryTraceStore();
+      }
+    }
     const secrets = options.secrets ?? await EncryptedSecretStore.open(homeDir);
     const handoffs = createAuthHandoffs(storage, secrets, publicUrl, mode);
     const { runtime, eventService, upstreams } = buildRuntime(storage, trace, secrets, handoffs);
@@ -115,7 +124,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     async function catalog(profileId: string) { return effectiveCatalog(storage, await profile(profileId)); }
 
     function liveSource(source: T.SourceRecord) {
-      if (source.kind === 'cli_wrapper') requireLocalCli(mode);
+      if (source.kind === 'cli_wrapper' || source.kind === 'mcp_stdio') requireLocalCli(mode);
       if (source.config.kind !== source.kind) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source kind does not match its configuration');
       if (!source.enabled) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source is disabled');
     }
@@ -123,7 +132,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     async function guardProposalSource(source: T.SourceRecord) {
       if (!source.id.startsWith('proposal-')) return;
       const proposal = await storage.getProposal(source.id.slice('proposal-'.length));
-      if (proposal && (proposal.status !== 'activated' || proposal.activatedSourceId !== source.id)) {
+      if (!proposal || proposal.status !== 'activated' || proposal.activatedSourceId !== source.id) {
         throw new GatewayError('PROPOSAL_NOT_ACTIVATED', 'The capability proposal is pending operator activation');
       }
     }
@@ -144,7 +153,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         if (cap.permission === 'require_approval') {
           await approvals.require({ profileId: context.profileId, sessionId: context.sessionId, clientName: context.clientName,
             sourceId: source.id, capabilityId: cap.id,
-            toolName: cap.exposedName, reason: 'Operator approval is required by profile policy' }, args);
+            toolName: cap.exposedName, reason: 'Operator approval is required by profile policy' }, args, context.signal);
         }
         const [fresh, raw, latest] = await Promise.all([catalog(context.profileId), capability(cap.id), upstreams.source(cap.sourceId)]);
         const effective = fresh.find(item => item.id === cap.id);
@@ -155,6 +164,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         if (cap.permission === 'require_approval' && !await eventService.identityActive(context.identity)) {
           throw new GatewayError('FORBIDDEN', 'Client access was revoked');
         }
+        if (context.signal?.aborted) throw new GatewayError('APPROVAL_TIMEOUT', 'Caller cancelled before execution');
         if (closing) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Gateway is closing');
         liveSource(latest);
         const callArgs = resourceUri === undefined ? args : { ...args, uri: resourceUri };
@@ -180,7 +190,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       const id = input.id ?? randomUUID();
       if ((id.startsWith('proposal-') && !proposalActivation) || id === 'gateway') throw new GatewayError('CONFLICT', 'Source ID is reserved');
       if (sourceCreates.has(id)) throw new GatewayError('CONFLICT', 'Source already exists');
-      if (mode === 'remote' && input.kind === 'cli_wrapper') requireLocalCli(mode);
+      if (mode === 'remote' && (input.kind === 'cli_wrapper' || input.kind === 'mcp_stdio')) requireLocalCli(mode);
       const validated = validateSourceConfig({ id, name: input.name, kind: input.kind, config: input.config,
         enabled: input.enabled ?? true, authConfig: input.authConfig ?? { kind: 'none' },
         refreshPolicy: input.refreshPolicy ?? { mode: 'manual' } }, secrets);
@@ -214,7 +224,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         let updated!: T.SourceRecord;
         await upstreams.mutate(id, async () => {
           const source = await upstreams.source(id);
-          if (mode === 'remote' && source.kind === 'cli_wrapper' && patch.enabled !== false) requireLocalCli(mode);
+          if (mode === 'remote' && (source.kind === 'cli_wrapper' || source.kind === 'mcp_stdio') && patch.enabled !== false) requireLocalCli(mode);
           const validated = validateSourceConfig({
             id, name: patch.name ?? source.name, kind: source.kind, config: patch.config ?? source.config,
             enabled: patch.enabled ?? source.enabled, authConfig: patch.authConfig ?? source.authConfig,
@@ -312,6 +322,18 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         await storage.revokeClientToken(id, now());
       },
       listOAuthClients: () => storage.listOAuthClients(),
+      async revokeOAuthClient(clientId) {
+        const client = await storage.getOAuthClient(clientId);
+        if (!client) throw new GatewayError('NOT_FOUND', 'OAuth client does not exist');
+        const revokedAt = now();
+        await storage.deleteOAuthClient(clientId);
+        await storage.revokeOAuthRefreshTokensByClient(clientId, revokedAt);
+        for (const token of await storage.listClientTokens()) {
+          if (token.clientId === clientId && !token.revokedAt) {
+            await storage.revokeClientToken(token.id, revokedAt);
+          }
+        }
+      },
       listSecrets: () => secrets.listMetadata(),
       setSecret: (name, value, description) => secrets.set(name, value, description),
       deleteSecret: name => secrets.delete(name),
@@ -357,7 +379,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       exportConfig: () => exportConfig(storage, secrets),
       async importConfig(bundle, importOptions) {
         const result = await editProfiles(() => upstreams.reconfigure(() =>
-          importConfig(storage, secrets, bundle, importOptions?.merge ?? false, mode)));
+          importConfig(storage, secrets, bundle, importOptions?.merge ?? false, mode, importOptions?.enableExecutables ?? false)));
         const current = await storage.listSources();
         await upstreams.refreshAll(current.filter(source => source.enabled &&
           (source.refreshPolicy.mode !== 'manual' || !['mcp_stdio', 'mcp_http'].includes(source.kind))));

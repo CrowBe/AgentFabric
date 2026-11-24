@@ -39,7 +39,7 @@ Open **Overview & Connect**, pick a profile, mint a token, and copy the snippet 
 | Cursor | Bearer token from an environment variable | `mcp.json` |
 | Generic MCP 2026-07-28 + Events | Bearer token | any client |
 
-One endpoint (`/mcp/<profile>`) serves tools, prompts, resources, skills (`skill://` over `ext/skills`), and events (`io.modelcontextprotocol/events`). AgentFabric never writes files or symlinks into harness-specific folders; you paste the snippet yourself.
+One endpoint (`/mcp/<profile>`) serves tools, prompts, resources, skills (`skill://` over `io.modelcontextprotocol/skills`), and events (`io.modelcontextprotocol/events`). AgentFabric never writes files or symlinks into harness-specific folders; you paste the snippet yourself.
 
 ## Architecture
 
@@ -72,7 +72,7 @@ Pick the smallest option that fits. All of them speak standard remote MCP and ne
 | **Local only** (default) | `agentfabric start`. Binds `127.0.0.1:7432`. Local CLI wrappers and shared folders are available. |
 | **Tailscale Funnel** | Run the gateway locally, then `tailscale funnel 7432`. Start with `AGENTFABRIC_PUBLIC_URL=https://<machine>.<tailnet>.ts.net` so OAuth metadata and snippets use the public URL. |
 | **Cloudflare Tunnel** | `cloudflared tunnel --url http://127.0.0.1:7432` (or a named tunnel), then set `AGENTFABRIC_PUBLIC_URL` to the tunnel hostname. |
-| **Cloudflare Workers** | `npm run build`, `wrangler secret put AGENTFABRIC_OPERATOR_TOKEN`, `wrangler deploy`. Runs in `remote` mode: local CLI and folder sources are refused, and the gateway never tunnels back into your machine. Serve the UI with a Workers static assets binding named `ASSETS` pointing at `dist/web`, and inject a persistent `StorageAdapter` for durable state (the default is in-memory). Use explicit server-to-client sharing for local workspace context. |
+| **Cloudflare Workers** | `npm run build`, `wrangler secret put AGENTFABRIC_OPERATOR_TOKEN`, `wrangler deploy`. Runs in `remote` mode: local CLI wrappers and stdio processes are refused, and the gateway never tunnels back into your machine. Serve the UI with a Workers static assets binding named `ASSETS` pointing at `dist/web`, and bind a Cloudflare D1 database as `DB` (or set `AGENTFABRIC_ALLOW_EPHEMERAL=1` for ephemeral testing). |
 
 Environment variables: `AGENTFABRIC_HOME`, `AGENTFABRIC_PORT`, `AGENTFABRIC_HOST`, `AGENTFABRIC_PUBLIC_URL`, `AGENTFABRIC_MODE`, `AGENTFABRIC_OPERATOR_TOKEN`, and `AGENTFABRIC_LLM_API_URL`, `AGENTFABRIC_LLM_API_KEY_SECRET`, `AGENTFABRIC_LLM_MODEL`, `AGENTFABRIC_LLM_PROVIDER` for LLM-assisted drafting.
 

@@ -42,7 +42,7 @@ const builtins = [
   },
 ].map(tool => ({ ...tool, inputSchema: { ...tool.inputSchema, additionalProperties: false } }));
 
-export type InvocationContext = { profileId: string; sessionId?: string; clientName?: string; identity: ClientIdentity };
+export type InvocationContext = { profileId: string; sessionId?: string; clientName?: string; identity: ClientIdentity; signal?: AbortSignal };
 type Invoke = (cap: T.EffectiveCapability, args: unknown, context: InvocationContext, resourceUri?: string) => Promise<unknown>;
 
 function find(catalog: T.EffectiveCapability[], name: string, kind?: T.CapabilityKind, exposure?: 'direct') {

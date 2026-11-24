@@ -102,6 +102,9 @@ export function createOAuth(storage: StorageAdapter, publicUrl: string) {
   };
 
   async function handleOAuthRegister(request: Request) {
+    if ((await storage.listOAuthClients()).length >= 100) {
+      return oauthError('invalid_client_metadata', 'Maximum registered OAuth clients reached', 429);
+    }
     const parsed = registration.safeParse(await request.json().catch(() => null));
     if (!parsed.success || !parsed.data.redirect_uris.every(validRedirect) || !parsed.data.grant_types.includes('authorization_code')) {
       return oauthError('invalid_client_metadata', 'Register a public authorization-code client with valid redirect URIs');
@@ -146,7 +149,16 @@ export function createOAuth(storage: StorageAdapter, publicUrl: string) {
         credential = code;
       } else {
         const refresh = await storage.getOAuthRefreshTokenByHash(hash);
-        if (refresh?.revokedAt) return invalid();
+        if (refresh?.revokedAt) {
+          const revokedAt = new Date().toISOString();
+          await storage.revokeOAuthRefreshTokensByClient(refresh.clientId, revokedAt);
+          for (const tok of await storage.listClientTokens()) {
+            if (tok.clientId === refresh.clientId && !tok.revokedAt) {
+              await storage.revokeClientToken(tok.id, revokedAt);
+            }
+          }
+          return invalid();
+        }
         credential = refresh;
       }
       if (!credential || credential.clientId !== client.clientId || !(Date.parse(credential.expiresAt) > Date.now())) return invalid();
@@ -156,8 +168,9 @@ export function createOAuth(storage: StorageAdapter, publicUrl: string) {
       if (resource && !resourceMatches(resource, profile.id, profile.name)) return oauthError('invalid_target', 'Invalid MCP resource for this profile');
       if (params.has('scope') && params.get('scope') !== credential.scope) return oauthError('invalid_scope', 'Requested scope is unavailable');
       if (grant === 'refresh_token') await storage.revokeOAuthRefreshToken(hash, new Date().toISOString());
-      const access = await issueClientToken(storage, { label: client.clientName, profileId: profile.id, scopes: [credential.scope] },
-        Date.now() + accessLifetime * 1000);
+      const access = await issueClientToken(storage, {
+        label: client.clientName, profileId: profile.id, clientId: client.clientId, scopes: [credential.scope],
+      }, Date.now() + accessLifetime * 1000);
       let refresh: string | undefined;
       if (client.grantTypes.includes('refresh_token')) {
         refresh = randomToken('af_refresh_');
@@ -175,8 +188,12 @@ export function createOAuth(storage: StorageAdapter, publicUrl: string) {
 
   return {
     validateOAuthAuthorize, approveOAuthAuthorize, handleOAuthRegister, handleOAuthToken,
-    async handleOAuthProtectedResourceMetadata() {
-      return Response.json({ resource: `${publicUrl}/mcp`, authorization_servers: [publicUrl],
+    async handleOAuthProtectedResourceMetadata(request: Request) {
+      const path = new URL(request.url).pathname;
+      const prefix = '/.well-known/oauth-protected-resource/mcp/';
+      const profileSuffix = path.startsWith(prefix) ? path.slice(prefix.length) : '';
+      const resource = profileSuffix ? `${publicUrl}/mcp/${profileSuffix}` : `${publicUrl}/mcp`;
+      return Response.json({ resource, authorization_servers: [publicUrl],
         bearer_methods_supported: ['header'], scopes_supported: ['mcp'] });
     },
     async handleOAuthAuthorizationServerMetadata() {

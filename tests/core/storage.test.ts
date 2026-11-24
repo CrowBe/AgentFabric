@@ -73,8 +73,8 @@ it('persists encrypted values with restrictive modes and rejects tampering', asy
   expect(ciphertext.includes(Buffer.from('shared-secret'))).toBe(false);
   const reopened = await EncryptedSecretStore.open(home);
   expect(await reopened.get('two')).toBe('shared-secret-with-suffix');
-  expect(reopened.redactValue({ 'shared-secret': ['shared-secret-with-suffix', 'Bearer abcdef', 'sk-key', 'ghp_foo', 'af_tok_xyz', 'xyz'] }))
-    .toEqual({ '[REDACTED]': ['[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', 'xyz'] });
+  expect(reopened.redactValue({ 'shared-secret': ['shared-secret-with-suffix', 'Bearer abcdef', 'sk-key', 'ghp_foo', 'af_tok_xyz', 'xyz', 'Bearer token and sk-learn'] }))
+    .toEqual({ '[REDACTED]': ['[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', 'xyz', 'Bearer token and sk-learn'] });
   ciphertext[ciphertext.length - 1] ^= 1;
   await writeFile(join(home, 'secrets.enc'), ciphertext);
   await expect(EncryptedSecretStore.open(home)).rejects.toThrow();
@@ -129,6 +129,16 @@ it('enforces strict nested arguments, formats and typed dictionaries', () => {
   expect(() => validateArguments({ type: 'bad' }, {})).toThrow(/schema/);
   expect((strictSchema(schema).properties as typeof schema.properties).data.items.additionalProperties).toBe(false);
   expect(schema.properties.data.items.additionalProperties).toBe(true);
+
+  const composed = {
+    type: 'object',
+    allOf: [
+      { properties: { a: { type: 'string' } }, required: ['a'] },
+      { properties: { b: { type: 'integer' } }, required: ['b'] },
+    ],
+  };
+  expect(() => validateArguments(composed, { a: 'ok', b: 2 })).not.toThrow();
+  expect(() => validateArguments(composed, { a: 'ok' })).toThrow(/required/);
 });
 
 it('applies a validated portable bundle to Turso and invalidates the replaced catalog', async () => {

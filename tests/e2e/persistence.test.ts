@@ -120,3 +120,29 @@ it('exports no credentials and restores sources, overlays, profiles, and safety 
     expect((await stat(join(imported.homeDir, filename))).isFile()).toBe(true);
   }
 });
+
+it('imports local cli_wrapper and mcp_stdio sources disabled by default without executing commands', async () => {
+  const { cliSource, tempDir } = await import('./harness.js');
+  const workspace = await tempDir();
+  const cli = cliSource(workspace);
+  const source = { ...cli.input, id: 'cli-bundle', enabled: true };
+  const target = await startGateway();
+  const baseBundle = await api<PortableConfigBundle>(target, '/config/export');
+  const importedBundle: PortableConfigBundle = {
+    ...baseBundle,
+    sources: [{
+      id: source.id,
+      name: source.name,
+      kind: 'cli_wrapper',
+      enabled: true,
+      config: source.config,
+      authConfig: { kind: 'none' },
+      refreshPolicy: { mode: 'manual' },
+    }],
+  };
+  await api(target, '/config/import', 'POST', { bundle: importedBundle, merge: true });
+  expect(await api(target, `/sources/${source.id}`)).toMatchObject({
+    source: { id: source.id, enabled: false, health: 'disabled' },
+  });
+  expect(await cli.calls()).toEqual([]);
+});

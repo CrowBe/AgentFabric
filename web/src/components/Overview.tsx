@@ -165,7 +165,7 @@ function ConnectCard() {
           </div>
           <p className="muted">
             One endpoint serves tools, prompts, resources, skills (<code>skill://</code> via{' '}
-            <code>ext/skills</code>) and events (<code>io.modelcontextprotocol/events</code>). Local writes:{' '}
+            <code>io.modelcontextprotocol/skills</code>) and events (<code>io.modelcontextprotocol/events</code>). Local writes:{' '}
             <strong>{data.localWrites}</strong>. No files or symlinks are created in harness folders.
           </p>
           {data.warnings.map((warning) => (

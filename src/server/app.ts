@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -77,6 +78,16 @@ export function createApp(
   app.get('/.well-known/oauth-authorization-server', (c) =>
     runtime.handleOAuthAuthorizationServerMetadata(c.req.raw),
   );
+  const rejectOversized = (maxSize: number) =>
+    bodyLimit({
+      maxSize,
+      onError: (c) => c.json(errorBody('INVALID_INPUT', 'Request body too large'), 413),
+    });
+
+  app.use('/oauth/*', rejectOversized(64 * 1024));
+  app.use('/mcp', rejectOversized(2 * 1024 * 1024));
+  app.use('/mcp/*', rejectOversized(2 * 1024 * 1024));
+
   app.post('/oauth/register', (c) => runtime.handleOAuthRegister(c.req.raw));
   app.post('/oauth/token', (c) => runtime.handleOAuthToken(c.req.raw));
   mountAuthPages(app, runtime);

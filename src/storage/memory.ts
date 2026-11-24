@@ -101,9 +101,11 @@ export abstract class RecordStorage implements T.StorageAdapter {
   }
   async getClientTokenByHash(tokenHash: string) { return (await this.scan('client_tokens', { tokenHash }))[0] ?? null; }
   upsertClientToken(row: T.StoredClientToken) {
-    const { id, label, profileId, tokenPrefix, scopes, createdAt, lastUsedAt, revokedAt, tokenHash } = row;
+    const { id, label, profileId, clientId, tokenPrefix, scopes, createdAt, lastUsedAt, revokedAt, tokenHash } = row;
     assertHash(tokenHash);
-    return this.write('client_tokens', id, { id, label, profileId, tokenPrefix, scopes, createdAt, lastUsedAt, revokedAt, tokenHash });
+    return this.write('client_tokens', id, {
+      id, label, profileId, ...(clientId !== undefined ? { clientId } : {}), tokenPrefix, scopes, createdAt, lastUsedAt, revokedAt, tokenHash,
+    });
   }
   private tokenUpdates = new Map<string, Promise<void>>();
   private updateToken(id: string, patch: Partial<T.StoredClientToken>) {
@@ -122,6 +124,7 @@ export abstract class RecordStorage implements T.StorageAdapter {
   listOAuthClients() { return this.scan('oauth_clients'); }
   getOAuthClient(id: string) { return this.read('oauth_clients', id); }
   upsertOAuthClient(row: T.OAuthClientRecord) { return this.write('oauth_clients', row.clientId, row); }
+  deleteOAuthClient(clientId: string) { return this.remove('oauth_clients', clientId); }
   saveOAuthCode(row: T.OAuthAuthorizationCodeRecord) {
     assertHash(row.codeHash);
     return this.write('oauth_codes', row.codeHash, row);
@@ -135,6 +138,14 @@ export abstract class RecordStorage implements T.StorageAdapter {
   async revokeOAuthRefreshToken(hash: string, revokedAt: string) {
     const row = await this.read('oauth_refresh_tokens', hash);
     if (row) await this.saveOAuthRefreshToken({ ...row, revokedAt });
+  }
+  async revokeOAuthRefreshTokensByClient(clientId: string, revokedAt: string) {
+    const rows = await this.scan('oauth_refresh_tokens');
+    await Promise.all(
+      rows
+        .filter((row) => row.clientId === clientId && !row.revokedAt)
+        .map((row) => this.saveOAuthRefreshToken({ ...row, revokedAt })),
+    );
   }
   saveAuthTicket(row: T.AuthTicketRecord) {
     assertHash(row.ticketHash);

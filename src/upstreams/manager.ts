@@ -146,7 +146,7 @@ export class UpstreamManager {
     const capabilities: Entry[] = [];
     const eventTypes: T.McpEventTypeRecord[] = [];
     if (!source.enabled) return { capabilities, eventTypes };
-    if (config.kind === 'cli_wrapper') requireLocalCli(this.mode);
+    if (config.kind === 'cli_wrapper' || config.kind === 'mcp_stdio') requireLocalCli(this.mode);
     await checkSecrets(source, this.secrets);
     if (config.kind === 'mcp_stdio' || config.kind === 'mcp_http') {
       const client = await this.client(source);
@@ -320,7 +320,7 @@ export class UpstreamManager {
       throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source configuration changed before execution');
     }
     const config = source.config;
-    if (config.kind === 'cli_wrapper') requireLocalCli(this.mode);
+    if (config.kind === 'cli_wrapper' || config.kind === 'mcp_stdio') requireLocalCli(this.mode);
     try {
       await checkSecrets(source, this.secrets);
       if (config.kind === 'cli_wrapper') return await executeCliWrapper({ ...source, config }, args, this.mode, this.secrets);

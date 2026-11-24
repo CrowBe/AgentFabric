@@ -62,9 +62,13 @@ it('negotiates MCP 2026-07-28 via the header and request metadata and rejects un
     const { id, response } = mcp.request('ping', params, headers);
     expect(await json(await response, 400)).toEqual({ jsonrpc: '2.0', id, error: {
       code: -32022, message: 'UnsupportedProtocolVersionError', data: { requested: unknown,
-        supported: [version, '2025-11-25', '2025-03-26'] },
+        supported: [version, '2025-11-25', '2025-06-18', '2025-03-26'] },
     } });
   }
+  const compat = mcp.request('ping', {}, { 'MCP-Protocol-Version': '2025-06-18' });
+  const compatRes = await compat.response;
+  expect(compatRes.headers.get('mcp-protocol-version')).toBe('2025-06-18');
+  expect(await json(compatRes)).toMatchObject({ id: compat.id, result: {} });
   const conflict = mcp.request('ping', { _meta: { [protocolKey]: '2025-11-25' } }, { 'MCP-Protocol-Version': version });
   expect(await json(await conflict.response)).toMatchObject({ error: { data: { code: 'INVALID_INPUT' } } });
 });

@@ -165,6 +165,7 @@ export interface GatewayRuntime {
   }): Promise<{ token: string; record: ClientTokenRecord }>;
   revokeToken(id: string): Promise<void>;
   listOAuthClients(): Promise<OAuthClientRecord[]>;
+  revokeOAuthClient(clientId: string): Promise<void>;
   listSecrets(): Promise<SecretMetadata[]>;
   setSecret(
     name: string,
@@ -231,7 +232,7 @@ export interface GatewayRuntime {
   exportConfig(): Promise<PortableConfigBundle>;
   importConfig(
     bundle: PortableConfigBundle,
-    options?: { merge?: boolean },
+    options?: { merge?: boolean; enableExecutables?: boolean },
   ): Promise<{
     importedSources: number;
     importedProfiles: number;

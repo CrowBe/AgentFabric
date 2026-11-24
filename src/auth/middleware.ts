@@ -18,12 +18,13 @@ export function authenticateOperator(request: Request, token: string) {
 
 export async function issueClientToken(
   storage: StorageAdapter,
-  input: { label: string; profileId: string; scopes?: string[] },
+  input: { label: string; profileId: string; clientId?: string; scopes?: string[] },
   expiresAt?: number,
 ): Promise<{ token: string; record: ClientTokenRecord }> {
   const token = randomToken(expiresAt === undefined ? 'af_tok_' : `af_tok_o${expiresAt.toString(36)}.`);
-  const record = {
+  const record: ClientTokenRecord = {
     id: randomUUID(), label: input.label, profileId: input.profileId,
+    ...(input.clientId !== undefined ? { clientId: input.clientId } : {}),
     tokenPrefix: token.slice(0, 12), scopes: input.scopes ?? ['mcp'], createdAt: new Date().toISOString(),
   };
   await storage.upsertClientToken({ ...record, tokenHash: hashToken(token) });
@@ -47,6 +48,7 @@ export async function authenticateClient(request: Request, profileName: string |
 
 export type ClientIdentity = { profile: ProfileRecord; principal: string; expiry?: number };
 
-export function challenge(publicUrl: string) {
-  return `Bearer resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"`;
+export function challenge(publicUrl: string, profileName?: string | null) {
+  const suffix = profileName ? `/mcp/${encodeURIComponent(profileName)}` : '';
+  return `Bearer resource_metadata="${publicUrl}/.well-known/oauth-protected-resource${suffix}"`;
 }

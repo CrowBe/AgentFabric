@@ -119,7 +119,9 @@ function validateBundle(input: unknown, secrets: SecretStore, mode?: GatewayMode
   for (const source of bundle.sources) {
     validateSourceConfig(source, secrets);
     if (source.id === 'gateway') throw new GatewayError('INVALID_INPUT', 'Source ID is reserved');
-    if (mode === 'remote' && source.kind === 'cli_wrapper') throw new GatewayError('REMOTE_CLI_FORBIDDEN', 'CLI wrappers require local mode');
+    if (mode === 'remote' && (source.kind === 'cli_wrapper' || source.kind === 'mcp_stdio')) {
+      throw new GatewayError('REMOTE_CLI_FORBIDDEN', 'Local CLI and stdio sources require local mode');
+    }
   }
   for (const keys of [
     bundle.sources.map(source => source.id), bundle.profiles.map(profile => profile.id),
@@ -141,7 +143,14 @@ export async function exportConfig(storage: StorageAdapter, secrets: SecretStore
   }, secrets);
 }
 
-export async function importConfig(storage: StorageAdapter, secrets: SecretStore, input: unknown, merge = false, mode?: GatewayMode) {
+export async function importConfig(
+  storage: StorageAdapter,
+  secrets: SecretStore,
+  input: unknown,
+  merge = false,
+  mode?: GatewayMode,
+  enableExecutables = false,
+) {
   const bundle = validateBundle(input, secrets, mode);
   const [oldSources, oldProfiles, oldPolicies, oldOverlays, caps, types] = await Promise.all([
     storage.listSources(), storage.listProfiles(), storage.listPolicies(), storage.listOverlays(),
@@ -158,10 +167,17 @@ export async function importConfig(storage: StorageAdapter, secrets: SecretStore
     aliases.set(profile.name, profile.id);
   }
   const timestamp = new Date().toISOString();
-  const records = bundle.sources.map(source => ({
-    ...source, health: source.enabled ? 'initializing' as const : 'disabled' as const,
-    createdAt: oldSources.find(old => old.id === source.id)?.createdAt ?? timestamp, updatedAt: timestamp,
-  }));
+  const records = bundle.sources.map(source => {
+    const isExecutable = source.kind === 'cli_wrapper' || source.kind === 'mcp_stdio';
+    const enabled = isExecutable && !enableExecutables ? false : source.enabled;
+    return {
+      ...source,
+      enabled,
+      health: enabled ? ('initializing' as const) : ('disabled' as const),
+      createdAt: oldSources.find(old => old.id === source.id)?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+  });
   const removedProfiles = oldProfiles.filter(profile => !finalProfiles.has(profile.id));
   if (storage instanceof RecordStorage) {
     const changes: ConfigChange[] = [
