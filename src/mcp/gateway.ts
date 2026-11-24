@@ -45,11 +45,17 @@ const builtins = [
 export type InvocationContext = { profileId: string; sessionId?: string; clientName?: string; identity: ClientIdentity };
 type Invoke = (cap: T.EffectiveCapability, args: unknown, context: InvocationContext, resourceUri?: string) => Promise<unknown>;
 
-function find(visible: T.EffectiveCapability[], name: string, kind?: T.CapabilityKind) {
-  const eligible = visible.filter(cap => kind === undefined || (kind === 'resource' && cap.kind === 'skill') || cap.kind === kind);
-  const match = eligible.find(cap => cap.id === name) ?? eligible.find(cap => cap.exposedName === name);
-  if (!match) throw new GatewayError('CAPABILITY_NOT_FOUND', 'Capability is unavailable to this profile');
-  return match;
+function find(catalog: T.EffectiveCapability[], name: string, kind?: T.CapabilityKind, exposure?: 'direct') {
+  const matches = catalog.filter(cap => (cap.id === name || cap.exposedName === name) &&
+    (kind === undefined || (kind === 'resource' && cap.kind === 'skill') || cap.kind === kind));
+  const visible = matches.filter(visibleCapability);
+  const eligible = exposure === undefined ? visible : visible.filter(cap => cap.exposure === exposure);
+  const match = eligible.find(cap => cap.id === name) ?? eligible[0];
+  if (match) return match;
+  if (matches.length && !visible.length) {
+    throw new GatewayError('CAPABILITY_DENIED', 'Capability is denied by profile policy');
+  }
+  throw new GatewayError('CAPABILITY_NOT_FOUND', 'Capability is unavailable to this profile');
 }
 
 function readName(params: Record<string, unknown>, key: string) {
@@ -96,7 +102,8 @@ export class McpGateway {
       throw new GatewayError('NOT_FOUND', 'Method not found', { details: { rpcCode: -32601 } });
     }
 
-    const visible = (await this.catalog(context.profileId)).filter(visibleCapability);
+    const catalog = await this.catalog(context.profileId);
+    const visible = catalog.filter(visibleCapability);
     const direct = visible.filter(cap => cap.exposure === 'direct');
     const redact = <T>(value: T) => this.secrets.redactValue(value);
     switch (method) {
@@ -108,7 +115,7 @@ export class McpGateway {
         const name = readName(params, 'name');
         const args = Object.hasOwn(params, 'arguments') ? params.arguments : {};
         const builtin = builtins.find(tool => tool.name === name);
-        if (!builtin) return callResult(await this.invoke(find(direct, name, 'tool'), args, context));
+        if (!builtin) return callResult(await this.invoke(find(catalog, name, 'tool', 'direct'), args, context));
         return this.telemetry.measure({ profileId: context.profileId, sessionId: context.sessionId, clientName: context.clientName, toolName: name }, args, async () => {
           validateArguments(builtin.inputSchema, args);
           switch (name) {
@@ -123,9 +130,9 @@ export class McpGateway {
               return callResult(redact({ capabilities: hits.map(({ inputSchema: _schema, ...cap }) => publicCapability(cap)) }));
             }
             case 'fabric_inspect':
-              return callResult(redact(publicCapability(find(visible, String(args.capability), args.kind as T.CapabilityKind | undefined))));
+              return callResult(redact(publicCapability(find(catalog, String(args.capability), args.kind as T.CapabilityKind | undefined))));
             case 'fabric_call':
-              return callResult(await this.invoke(find(visible, String(args.capability), args.kind as T.CapabilityKind | undefined),
+              return callResult(await this.invoke(find(catalog, String(args.capability), args.kind as T.CapabilityKind | undefined),
                 args.arguments ?? {}, context));
             default:
               return callResult(redact(await this.proposals.create(args, context.profileId, context.sessionId)));

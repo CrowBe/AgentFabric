@@ -179,7 +179,7 @@ function connectBody(
   return `<h1>Connect ${escapeHtml(source.name)}</h1>
 <p>Enter the credentials this source needs. They are stored in the gateway vault and are never shown to agents or echoed back here.</p>
 ${instructions ? `<pre>${escapeHtml(instructions)}</pre>` : ''}
-${runtime.mode === 'local' && cliLoginCommand ? `<p class="hint">Prefer the terminal? Run <code>${escapeHtml(cliLoginCommand)}</code></p>` : ''}
+${runtime.mode === 'local' && source.kind === 'cli_wrapper' && cliLoginCommand ? `<p class="hint">Prefer the terminal? Run <code>${escapeHtml(cliLoginCommand)}</code></p>` : ''}
 <form method="post" action="/auth/connect/${encodeURIComponent(source.id)}" autocomplete="off">
 ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ''}
 <input type="hidden" name="ticket" value="${escapeHtml(ticket)}">
