@@ -3,6 +3,10 @@
   "main": "dist/deploy/cloudflare.js",
   "compatibility_date": "2026-11-24",
   "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/web",
+    "binding": "ASSETS"
+  },
   "vars": {
     "AGENTFABRIC_MODE": "remote"
   }
