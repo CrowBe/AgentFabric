@@ -109,11 +109,11 @@ function ConnectCard() {
   const [profileId, setProfileId] = useState('');
   const selected = profileId || profiles.data?.[0]?.id || '';
   const snippets = useResource(
-    () => (selected ? api.connectSnippets(selected) : Promise.resolve(undefined)),
+    async () => (selected ? { profileId: selected, snippets: await api.connectSnippets(selected) } : undefined),
     [selected],
   );
   const [minted, setMinted] = useState<{ token: string; profileId: string }>();
-  const data = snippets.data;
+  const data = snippets.data?.profileId === selected ? snippets.data.snippets : undefined;
   const token = minted && minted.profileId === selected ? minted.token : undefined;
   const fill = (text: string) => (token && data ? text.replaceAll(data.tokenPlaceholder, token) : text);
 

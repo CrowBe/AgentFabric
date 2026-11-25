@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { createGatewayRuntime } from '../runtime/index.js';
 import { createApp } from '../server/app.js';
 import { D1StorageAdapter, type D1DatabaseLike } from '../storage/d1.js';
+import { D1SecretStore } from '../storage/d1-secrets.js';
 import { MemoryStorageAdapter, MemoryTraceStore } from '../storage/memory.js';
 import { InMemorySecretStore } from '../storage/secrets.js';
 import type {
@@ -16,14 +17,13 @@ import type {
 export interface WorkerEnv {
   AGENTFABRIC_PUBLIC_URL?: string;
   AGENTFABRIC_OPERATOR_TOKEN?: string;
+  AGENTFABRIC_MASTER_KEY?: string;
   AGENTFABRIC_ALLOW_EPHEMERAL?: string;
   AGENTFABRIC_LLM_API_URL?: string;
   AGENTFABRIC_LLM_API_KEY_SECRET?: string;
   AGENTFABRIC_LLM_MODEL?: string;
   AGENTFABRIC_LLM_PROVIDER?: string;
-  /** Durable Cloudflare D1 binding for gateway state. */
   DB?: D1DatabaseLike;
-  /** Workers Static Assets binding serving the built web UI (`dist/web`). */
   ASSETS?: { fetch(request: Request): Promise<Response> };
   [binding: string]: unknown;
 }
@@ -37,7 +37,6 @@ export interface WorkerOptions {
   storage?: StorageAdapter;
   traceStore?: TraceStore;
   secrets?: SecretStore;
-  /** Test seam; defaults to the real runtime. */
   createRuntime?: (options: RuntimeOptions) => Promise<GatewayRuntime>;
 }
 
@@ -47,6 +46,9 @@ interface Booted {
 }
 
 const API_PATHS = ['/api', '/mcp', '/oauth', '/auth', '/.well-known', '/healthz'];
+
+const needsMasterKey = (options: WorkerOptions, env: WorkerEnv): boolean =>
+  Boolean(env.DB) && !options.secrets && !options.createRuntime;
 
 const isGatewayPath = (pathname: string): boolean =>
   API_PATHS.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -95,11 +97,6 @@ function llmFromEnv(env: WorkerEnv): LlmAssistConfig | undefined {
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-/**
- * Cloudflare Workers adapter. Always runs in `remote` mode, so local CLI and stdio sources
- * are refused by the runtime. Requires a `DB` (D1) binding or injected durable `storage`
- * unless `AGENTFABRIC_ALLOW_EPHEMERAL=1` is explicitly set for ephemeral isolate testing.
- */
 export function createWorker(options: WorkerOptions = {}): {
   fetch(request: Request, env: WorkerEnv, ctx?: WorkerExecutionContext): Promise<Response>;
 } {
@@ -113,6 +110,16 @@ export function createWorker(options: WorkerOptions = {}): {
     throw new Error('Durable storage binding DB is required unless AGENTFABRIC_ALLOW_EPHEMERAL=1');
   };
 
+  const resolveSecrets = async (env: WorkerEnv): Promise<SecretStore> => {
+    if (options.secrets) return options.secrets;
+    const masterKey = env.AGENTFABRIC_MASTER_KEY?.trim() ? env.AGENTFABRIC_MASTER_KEY : undefined;
+    if (env.DB && masterKey) return D1SecretStore.open(env.DB, masterKey);
+    if (needsMasterKey(options, env)) {
+      throw new Error('AGENTFABRIC_MASTER_KEY is required to encrypt secrets in D1');
+    }
+    return new InMemorySecretStore();
+  };
+
   const boot = (request: Request, env: WorkerEnv): Promise<Booted> => {
     booted ??= (async () => {
       const operatorToken = env.AGENTFABRIC_OPERATOR_TOKEN;
@@ -121,7 +128,7 @@ export function createWorker(options: WorkerOptions = {}): {
       }
       const storage = await resolveStorage(env);
       const traceStore = options.traceStore ?? new MemoryTraceStore();
-      const secrets = options.secrets ?? new InMemorySecretStore();
+      const secrets = await resolveSecrets(env);
       const publicUrl = (env.AGENTFABRIC_PUBLIC_URL ?? new URL(request.url).origin).replace(
         /\/+$/,
         '',
@@ -165,6 +172,13 @@ export function createWorker(options: WorkerOptions = {}): {
           503,
           'INTERNAL_ERROR',
           'Durable Cloudflare D1 binding DB is not configured (set DB or AGENTFABRIC_ALLOW_EPHEMERAL=1)',
+        );
+      }
+      if (needsMasterKey(options, env) && !env.AGENTFABRIC_MASTER_KEY?.trim()) {
+        return json(
+          503,
+          'INTERNAL_ERROR',
+          'Gateway is not configured: set the AGENTFABRIC_MASTER_KEY secret to encrypt secrets stored in D1',
         );
       }
       if (

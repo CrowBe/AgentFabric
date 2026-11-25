@@ -15,9 +15,7 @@ export interface CliIo {
   env: NodeJS.ProcessEnv;
   readFile(path: string): Promise<string>;
   writeFile(path: string, data: string): Promise<void>;
-  /** Boots the gateway and resolves after shutdown. Overridden in tests. */
   startServer(options: NodeServerOptions): Promise<void>;
-  /** Looks up the operator token stored in the gateway home directory. */
   readStoredToken(homeDir: string | undefined): Promise<string | undefined>;
 }
 
@@ -36,6 +34,11 @@ Commands:
   approvals list                List approval requests (--status pending|approved|denied|expired)
   approvals approve ID          Approve a pending request
   approvals deny ID             Deny a pending request
+  skills list                   List pooled MCP skills
+  skills add URL                Import skill(s) from a GitHub URL (--name, --ref, --path, --include, --tag, --secret)
+  proposals list                List agent capability proposals (--status pending_review|activated|rejected)
+  proposals activate ID         Approve and activate a capability proposal
+  proposals reject ID           Reject a capability proposal
   recipes list                  List starter recipes
   events list                   List event occurrences
   events emit NAME              Emit an event (--data JSON, --source ID)
@@ -67,6 +70,11 @@ const OPTIONS = {
   status: { type: 'string' },
   note: { type: 'string' },
   name: { type: 'string' },
+  ref: { type: 'string' },
+  path: { type: 'string' },
+  include: { type: 'string', multiple: true },
+  tag: { type: 'string', multiple: true },
+  secret: { type: 'string' },
   after: { type: 'string' },
   limit: { type: 'string' },
   source: { type: 'string' },
@@ -325,6 +333,100 @@ export async function runCli(
           return 0;
         }
         throw new CliError('Usage: agentfabric approvals list|approve|deny');
+      }
+      case 'skills': {
+        if (sub === 'list') {
+          const { capabilities } = await client.api.call<{
+            capabilities: Array<{
+              exposedName: string;
+              sourceName: string;
+              uri?: string;
+              available: boolean;
+            }>;
+          }>('GET', '/api/capabilities?kind=skill');
+          if (values.json) out(JSON.stringify({ skills: capabilities }, null, 2));
+          else if (capabilities.length === 0) out('No skills in the pool.');
+          else {
+            out(
+              table([
+                ['SLUG', 'SOURCE', 'URI', 'AVAILABLE'],
+                ...capabilities.map((c) => [
+                  c.exposedName,
+                  c.sourceName,
+                  c.uri ?? `skill://${c.exposedName}`,
+                  c.available ? 'yes' : 'no',
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'add') {
+          const url = rest[0];
+          if (!url) {
+            throw new CliError(
+              'Usage: agentfabric skills add <github-url> [--name NAME] [--ref REF] [--path SUBPATH] [--include SLUG...] [--tag TAG...] [--secret NAME]',
+            );
+          }
+          const recipeValues: Record<string, unknown> = {
+            url,
+            ...(values.name ? { name: values.name } : {}),
+            ...(values.ref ? { ref: values.ref } : {}),
+            ...(values.path ? { path: values.path } : {}),
+            ...(values.include?.length ? { includeSkills: values.include } : {}),
+            ...(values.tag?.length ? { tags: values.tag } : {}),
+            ...(values.secret ? { secretName: values.secret } : {}),
+          };
+          const { source } = await client.api.call<{
+            source: { id: string; name: string; health: string };
+          }>('POST', '/api/recipes/github-skill-repo/instantiate', { values: recipeValues });
+          const { capabilities } = await client.api.call<{
+            capabilities: Array<{ exposedName: string }>;
+          }>('GET', `/api/capabilities${q({ sourceId: source.id, kind: 'skill' })}`);
+          if (values.json) {
+            out(JSON.stringify({ source, skillCount: capabilities.length, skills: capabilities }, null, 2));
+          } else {
+            out(`Imported ${capabilities.length} skill(s) from ${source.name} (${source.id}, health: ${source.health})`);
+          }
+          return 0;
+        }
+        throw new CliError('Usage: agentfabric skills list|add');
+      }
+      case 'proposals': {
+        if (sub === 'list') {
+          const { proposals } = await client.api.call<{
+            proposals: Array<{ id: string; kind: string; name: string; status: string; profileId?: string }>;
+          }>('GET', `/api/proposals${q({ status: values.status })}`);
+          if (values.json) out(JSON.stringify({ proposals }, null, 2));
+          else if (proposals.length === 0) out('No proposals.');
+          else {
+            out(
+              table([
+                ['ID', 'KIND', 'NAME', 'STATUS', 'PROFILE'],
+                ...proposals.map((p) => [p.id, p.kind, p.name, p.status, p.profileId ?? '-']),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'activate' || sub === 'reject') {
+          const id = rest[0];
+          if (!id) throw new CliError(`Usage: agentfabric proposals ${sub} ID [--note TEXT]`);
+          const result = await client.api.call<{ proposal: { id: string; status: string }; source?: { id: string } }>(
+            'POST',
+            `/api/proposals/${encodeURIComponent(id)}/${sub}`,
+            values.note ? { note: values.note } : {},
+          );
+          if (values.json) out(JSON.stringify(result, null, 2));
+          else {
+            out(
+              `Proposal ${result.proposal.id} is now ${result.proposal.status}` +
+                (result.source ? ` (source ${result.source.id})` : ''),
+            );
+          }
+          return 0;
+        }
+        throw new CliError('Usage: agentfabric proposals list|activate|reject');
       }
       case 'events': {
         if (sub === 'list') {

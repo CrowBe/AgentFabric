@@ -1,4 +1,4 @@
-import type { CreateSourceInput, SourceKind } from '../../../src/types/index.js';
+import type { CreateSourceInput, SourceKind, UpstreamOAuthConfig } from '../../../src/types/index.js';
 import type { RecipeFieldInfo } from '../api';
 import { SelectField, SwitchField, TextAreaField, TextField, lines, parseJsonObject } from './ui';
 
@@ -15,7 +15,6 @@ export function initialValues(fields: RecipeFieldInfo[]): FormValues {
   return values;
 }
 
-/** Renders any field list; recipes and the custom builder share it. */
 export function DynamicForm({
   fields,
   values,
@@ -77,6 +76,15 @@ export function DynamicForm({
   );
 }
 
+export const OAUTH_FIELD_NAMES = new Set([
+  'scopes',
+  'clientId',
+  'clientSecretName',
+  'authorizationEndpoint',
+  'tokenEndpoint',
+  'extraAuthParams',
+]);
+
 const name: RecipeFieldInfo = { name: 'name', label: 'Source name', type: 'text', required: true };
 
 export const CUSTOM_FIELDS: Record<SourceKind, RecipeFieldInfo[]> = {
@@ -97,8 +105,58 @@ export const CUSTOM_FIELDS: Record<SourceKind, RecipeFieldInfo[]> = {
   mcp_http: [
     name,
     { name: 'url', label: 'MCP endpoint URL', type: 'text', required: true, placeholder: 'https://example.com/mcp' },
-    { name: 'secretName', label: 'Bearer secret name', type: 'text', help: 'Leave empty for an unauthenticated upstream.' },
+    {
+      name: 'secretName',
+      label: 'Bearer secret name',
+      type: 'text',
+      help: 'Leave empty for an unauthenticated or OAuth upstream.',
+    },
     { name: 'timeoutMs', label: 'Timeout (ms)', type: 'number' },
+    {
+      name: 'useOAuth',
+      label: 'Use OAuth 2.0 / 2.1',
+      type: 'boolean',
+      help: 'Enable interactive browser OAuth sign-in with PKCE and automatic token refresh.',
+    },
+    {
+      name: 'scopes',
+      label: 'OAuth scopes',
+      type: 'list',
+      help: 'Optional. One per line or comma-separated. Leave empty to use server defaults.',
+    },
+    {
+      name: 'clientId',
+      label: 'OAuth client ID',
+      type: 'text',
+      help: 'Optional pre-registered client ID. Leave empty to use Dynamic Client Registration.',
+    },
+    {
+      name: 'clientSecretName',
+      label: 'OAuth client secret name',
+      type: 'text',
+      help: 'Optional vault secret name holding the pre-registered client secret.',
+    },
+    {
+      name: 'authorizationEndpoint',
+      label: 'Authorization endpoint',
+      type: 'text',
+      placeholder: 'https://auth.example.com/authorize',
+      help: 'Optional override; leave empty for automatic discovery.',
+    },
+    {
+      name: 'tokenEndpoint',
+      label: 'Token endpoint',
+      type: 'text',
+      placeholder: 'https://auth.example.com/token',
+      help: 'Optional override; leave empty for automatic discovery.',
+    },
+    {
+      name: 'extraAuthParams',
+      label: 'Extra authorization parameters',
+      type: 'list',
+      placeholder: 'access_type=offline\nprompt=consent',
+      help: 'Optional extra authorization parameters (key=value per line).',
+    },
   ],
   cli_wrapper: [
     name,
@@ -130,8 +188,8 @@ export const CUSTOM_FIELDS: Record<SourceKind, RecipeFieldInfo[]> = {
       label: 'Steps (JSON array)',
       type: 'json',
       required: true,
-      help: 'Each step: { "id", "capability", "argumentsTemplate" }. Steps call pooled capabilities.',
-      default: '[\n  { "id": "first", "capability": "source:tool:name", "argumentsTemplate": {} }\n]',
+      help: 'Each step: { "id", "capability", "argumentsTemplate" }. "capability" is an exposed tool name or capability ID from the pool.',
+      default: '[\n  { "id": "first", "capability": "exposed_tool_name", "argumentsTemplate": {} }\n]',
     },
   ],
   skill: [
@@ -141,6 +199,21 @@ export const CUSTOM_FIELDS: Record<SourceKind, RecipeFieldInfo[]> = {
     { name: 'description', label: 'When to use it', type: 'textarea', required: true },
     { name: 'content', label: 'Skill content (markdown)', type: 'textarea', required: true },
     { name: 'tags', label: 'Tags', type: 'list' },
+  ],
+  skill_repo: [
+    name,
+    {
+      name: 'url',
+      label: 'GitHub URL or owner/repo',
+      type: 'text',
+      required: true,
+      placeholder: 'https://github.com/owner/repo',
+    },
+    { name: 'ref', label: 'Branch, tag, or commit', type: 'text' },
+    { name: 'path', label: 'Subpath in repository', type: 'text' },
+    { name: 'includeSkills', label: 'Only include slugs (one per line)', type: 'list' },
+    { name: 'tags', label: 'Tags', type: 'list' },
+    { name: 'secretName', label: 'GitHub token secret (private repos)', type: 'text' },
   ],
   shared_folder: [
     name,
@@ -159,6 +232,7 @@ export const KIND_LABELS: Record<SourceKind, string> = {
   cli_wrapper: 'CLI wrapper',
   composite: 'Composite tool',
   skill: 'Agent skill',
+  skill_repo: 'GitHub skill repo',
   shared_folder: 'Shared folder',
 };
 
@@ -182,6 +256,29 @@ const opt = <K extends string, V>(
   value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)
     ? {}
     : ({ [key]: value } as { [P in K]?: V });
+
+function extraAuthParams(text: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const entry of text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+    const split = entry.indexOf('=');
+    const key = split < 0 ? '' : entry.slice(0, split).trim();
+    if (!key) throw new Error(`Invalid extra authorization parameter '${entry}'. Use key=value`);
+    params[key] = entry.slice(split + 1).trim();
+  }
+  return params;
+}
+
+function oauthConfig(v: FormValues): UpstreamOAuthConfig {
+  const params = extraAuthParams(String(v.extraAuthParams ?? ''));
+  return {
+    ...opt('clientId', str(v, 'clientId')),
+    ...opt('clientSecretName', str(v, 'clientSecretName')),
+    ...opt('authorizationEndpoint', str(v, 'authorizationEndpoint')),
+    ...opt('tokenEndpoint', str(v, 'tokenEndpoint')),
+    ...opt('scopes', lines(String(v.scopes ?? ''))),
+    ...(Object.keys(params).length ? { extraAuthParams: params } : {}),
+  };
+}
 
 export function buildCustomSource(
   kind: SourceKind,
@@ -227,9 +324,14 @@ export function buildCustomSource(
     }
     case 'mcp_http': {
       const secretName = str(v, 'secretName');
+      const config = { kind, url: need(v, 'url', 'URL'), ...opt('timeoutMs', num(v, 'timeoutMs')) };
+      if (Boolean(v.useOAuth)) {
+        if (secretName) throw new Error('Choose either a bearer secret or OAuth, not both');
+        return { ...base, config, authConfig: { kind: 'oauth2', oauth: oauthConfig(v) } };
+      }
       return {
         ...base,
-        config: { kind, url: need(v, 'url', 'URL'), ...opt('timeoutMs', num(v, 'timeoutMs')) },
+        config,
         authConfig: secretName
           ? { kind: 'bearer_secret', secretName, requiredSecrets: [secretName] }
           : { kind: 'none' },
@@ -282,6 +384,23 @@ export function buildCustomSource(
           ...opt('tags', lines(String(v.tags ?? ''))),
         },
       };
+    case 'skill_repo': {
+      const secretName = str(v, 'secretName');
+      return {
+        ...base,
+        config: {
+          kind,
+          url: need(v, 'url', 'GitHub URL'),
+          ...opt('ref', str(v, 'ref')),
+          ...opt('path', str(v, 'path')),
+          ...opt('includeSkills', lines(String(v.includeSkills ?? ''))),
+          ...opt('tags', lines(String(v.tags ?? ''))),
+        },
+        authConfig: secretName
+          ? { kind: 'bearer_secret', secretName, requiredSecrets: [secretName] }
+          : { kind: 'none' },
+      };
+    }
     case 'shared_folder':
       return {
         ...base,

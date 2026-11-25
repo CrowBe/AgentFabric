@@ -11,7 +11,6 @@ import { createStaticHandler } from './static.js';
 export const GATEWAY_VERSION = '0.1.0';
 
 export interface CreateAppOptions {
-  /** Directory of the built web UI. Defaults to `dist/web`; `false` disables UI serving. */
   staticDir?: string | false;
 }
 
@@ -36,12 +35,9 @@ export function createApp(
     try {
       c.res.headers.set('x-content-type-options', 'nosniff');
     } catch {
-      // Immutable upstream response headers; the runtime owns them.
     }
   });
 
-  // MCP clients and OAuth discovery may be driven from browser-based tools. These
-  // endpoints use bearer tokens, never cookies, so open CORS does not widen access.
   const mcpCors = cors({
     origin: '*',
     allowHeaders: [

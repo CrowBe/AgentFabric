@@ -1,14 +1,21 @@
 import { useMemo, useState } from 'react';
 import { Switch, SwitchThumb } from '@ui-sdk/react/switch';
-import { PlusIcon, RefreshCwIcon, TrashIcon, ZapIcon } from 'lucide-react';
+import { KeyRoundIcon, LogOutIcon, PlusIcon, RefreshCwIcon, TrashIcon, ZapIcon } from 'lucide-react';
 import type { CapabilityKind } from '../../../src/types/index.js';
-import { api, type EffectiveCapability, type SourceRecord, type SourceTestResult } from '../api';
+import {
+  api,
+  type EffectiveCapability,
+  type SourceRecord,
+  type SourceTestResult,
+  type UpstreamOAuthStatus,
+} from '../api';
 import { AddSourceDialog } from './AddSourceDialog';
 import { OverlayEditor } from './OverlayEditor';
 import { KIND_LABELS } from './source-forms';
 import {
   Button,
   Card,
+  CopyButton,
   DataTable,
   HealthPill,
   LoadState,
@@ -24,18 +31,35 @@ import {
 
 const ALL = '__all';
 
+type OAuthPrompt = { sourceId: string; sourceName: string; authorizeUrl: string; redirectUri: string };
+
+const usesOAuth = (source: SourceRecord) => source.authConfig.kind === 'oauth2' && Boolean(source.authConfig.oauth);
+
 export function Sources() {
   const status = useResource(() => api.status(), []);
   const sources = useResource(() => api.sources(), []);
   const profiles = useResource(() => api.profiles(), []);
-  const [profileId, setProfileId] = useState('');
-  const pool = useResource(() => api.capabilities(profileId ? { profileId } : {}), [profileId]);
+  const [profileId, setProfileId] = useState('default');
+  const pool = useResource(() => api.capabilities({ profileId }), [profileId]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EffectiveCapability | null>(null);
   const [results, setResults] = useState<Record<string, SourceTestResult>>({});
+  const [oauthPrompt, setOAuthPrompt] = useState<OAuthPrompt | null>(null);
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState(ALL);
   const [kindFilter, setKindFilter] = useState(ALL);
+  const oauthSourceIds = (sources.data ?? []).filter(usesOAuth).map((s) => s.id);
+  const oauthStatuses = useResource(
+    async () =>
+      new Map<string, UpstreamOAuthStatus | undefined>(
+        await Promise.all(
+          oauthSourceIds.map(
+            async (id) => [id, await api.sourceOAuthStatus(id).catch(() => undefined)] as const,
+          ),
+        ),
+      ),
+    [oauthSourceIds.join('|'), sources.data],
+  );
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -69,6 +93,27 @@ export function Sources() {
   }
   async function toggle(source: SourceRecord, enabled: boolean) {
     if (await attempt(() => api.updateSource(source.id, { enabled }))) await refreshAll();
+  }
+  async function connectOAuth(source: SourceRecord) {
+    const res = await attempt(() => api.startSourceOAuth(source.id));
+    if (!res) return;
+    setOAuthPrompt({ sourceId: source.id, sourceName: source.name, ...res });
+    window.open(res.authorizeUrl, '_blank', 'noopener,noreferrer');
+  }
+  async function finishOAuth() {
+    setOAuthPrompt(null);
+    await refreshAll();
+  }
+  async function disconnectOAuth(source: SourceRecord) {
+    const yes = await ask(
+      `Disconnect ${source.name}?`,
+      'Stored OAuth tokens are removed and its capabilities stay unavailable until you sign in again. Vault secrets you configured are kept.',
+      'Disconnect',
+    );
+    if (yes && (await attempt(() => api.disconnectSourceOAuth(source.id), `Disconnected ${source.name}`))) {
+      if (oauthPrompt?.sourceId === source.id) setOAuthPrompt(null);
+      await refreshAll();
+    }
   }
   async function remove(source: SourceRecord) {
     const yes = await ask(
@@ -135,6 +180,23 @@ export function Sources() {
               header: 'Actions',
               cell: (s) => (
                 <div className="row wrap">
+                  {usesOAuth(s) ? (
+                    <>
+                      <Button
+                        data-size="sm"
+                        data-variant={s.health === 'healthy' ? undefined : 'solid'}
+                        onClick={() => connectOAuth(s)}
+                        aria-label={`${s.health === 'healthy' ? 'Reconnect' : 'Connect'} OAuth for ${s.name}`}
+                      >
+                        <KeyRoundIcon aria-hidden="true" /> {s.health === 'healthy' ? 'Reconnect' : 'Connect OAuth'}
+                      </Button>
+                      {oauthStatuses.data?.get(s.id)?.connected ? (
+                        <Button data-size="sm" onClick={() => disconnectOAuth(s)} aria-label={`Disconnect OAuth for ${s.name}`}>
+                          <LogOutIcon aria-hidden="true" /> Disconnect
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : null}
                   <Button data-size="sm" onClick={() => test(s)} aria-label={`Test ${s.name}`}>
                     <ZapIcon aria-hidden="true" /> Test
                   </Button>
@@ -149,6 +211,29 @@ export function Sources() {
             },
           ]}
         />
+        {oauthPrompt ? (
+          <Notice tone="info" title={`Sign in to ${oauthPrompt.sourceName}`}>
+            <p>
+              <a href={oauthPrompt.authorizeUrl} target="_blank" rel="noopener noreferrer">
+                Open OAuth sign-in page
+              </a>{' '}
+              if it did not open automatically. The link is single-use and expires in 10 minutes.
+            </p>
+            <p>The provider must accept this Redirect URI:</p>
+            <div className="row wrap">
+              <code>{oauthPrompt.redirectUri}</code>
+              <CopyButton text={oauthPrompt.redirectUri} label="OAuth callback URL" />
+            </div>
+            <div className="row wrap">
+              <Button data-size="sm" onClick={() => finishOAuth()}>
+                <RefreshCwIcon aria-hidden="true" /> Done, refresh sources
+              </Button>
+              <Button data-size="sm" onClick={() => setOAuthPrompt(null)}>
+                Dismiss
+              </Button>
+            </div>
+          </Notice>
+        ) : null}
         {Object.entries(results).map(([id, result]) => {
           const source = sources.data?.find((s) => s.id === id);
           return (
@@ -198,7 +283,7 @@ export function Sources() {
           />
           <SelectField
             label="Exposure as profile"
-            value={profileId || (profiles.data?.[0]?.id ?? '')}
+            value={profileId}
             onChange={setProfileId}
             options={(profiles.data ?? []).map((p) => ({ value: p.id, label: p.name }))}
           />
@@ -252,6 +337,7 @@ export function Sources() {
         onClose={() => setAdding(false)}
         onCreated={() => void refreshAll()}
         mode={status.data?.mode ?? 'local'}
+        publicUrl={status.data?.publicUrl}
       />
       <OverlayEditor capability={editing} onClose={() => setEditing(null)} onChanged={() => void pool.reload()} />
     </div>

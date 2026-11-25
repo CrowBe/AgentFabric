@@ -12,6 +12,54 @@ export function redactPatterns(input: string) {
   return input.replace(secretTokenPattern, '[REDACTED]');
 }
 
+function compileRedactor(secretValues: Iterable<string>): (input: string) => string {
+  const values = [...new Set(secretValues)].filter(value => value.length >= 4).sort((a, b) => b.length - a.length);
+  const escaped = values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const valuePattern = escaped.length ? new RegExp('(?=(' + escaped.join('|') + '))', 'g') : undefined;
+  return (input: string) => {
+    const ranges = [...input.matchAll(new RegExp(secretTokenPattern.source, 'gi'))]
+      .map(match => [match.index, match.index + match[0].length]);
+    if (valuePattern) {
+      for (const match of input.matchAll(valuePattern)) ranges.push([match.index, match.index + match[1].length]);
+    }
+    ranges.sort((a, b) => a[0] - b[0]);
+    let result = '';
+    let end = 0;
+    for (const [start, stop] of ranges) {
+      if (start >= end) result += input.slice(end, start) + '[REDACTED]';
+      end = Math.max(end, stop);
+    }
+    return result + input.slice(end);
+  };
+}
+
+export function redactWithValues(input: string, secretValues: Iterable<string>): string {
+  return compileRedactor(secretValues)(input);
+}
+
+export function redactValueWithValues<T>(value: T, secretValues: Iterable<string>): T {
+  const redact = compileRedactor(secretValues);
+  const seen = new WeakMap<object, unknown>();
+  const visit = (entry: unknown): unknown => {
+    if (typeof entry === 'string') return redact(entry);
+    if (entry === null || typeof entry !== 'object') return entry;
+    if (seen.has(entry)) return seen.get(entry);
+    if (Array.isArray(entry)) {
+      const result: unknown[] = [];
+      seen.set(entry, result);
+      for (const child of entry) result.push(visit(child));
+      return result;
+    }
+    const result: Record<string, unknown> = {};
+    seen.set(entry, result);
+    for (const [key, child] of Object.entries(entry)) {
+      Object.defineProperty(result, redact(key), { value: visit(child), enumerable: true, configurable: true });
+    }
+    return result;
+  };
+  return visit(value) as T;
+}
+
 export class InMemorySecretStore implements SecretStore {
   protected entries = new Map<string, SecretEntry>();
   private queue: Promise<unknown> = Promise.resolve();
@@ -45,48 +93,9 @@ export class InMemorySecretStore implements SecretStore {
   }
   async delete(name: string) { await this.change(entries => entries.delete(name)); }
 
-  redact(input: string) {
-    const values = [...new Set([...this.entries.values()].map(entry => entry.value))]
-      .filter(value => value.length >= 4).sort((a, b) => b.length - a.length);
-    const escaped = values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const patterns = new RegExp(secretTokenPattern.source, 'gi');
-    const ranges = [...input.matchAll(patterns)].map(match => [match.index, match.index + match[0].length]);
-    if (escaped.length) {
-      for (const match of input.matchAll(new RegExp('(?=(' + escaped.join('|') + '))', 'g'))) {
-        ranges.push([match.index, match.index + match[1].length]);
-      }
-    }
-    ranges.sort((a, b) => a[0] - b[0]);
-    let result = '';
-    let end = 0;
-    for (const [start, stop] of ranges) {
-      if (start >= end) result += input.slice(end, start) + '[REDACTED]';
-      end = Math.max(end, stop);
-    }
-    return result + input.slice(end);
-  }
-
-  redactValue<T>(value: T): T {
-    const seen = new WeakMap<object, unknown>();
-    const visit = (entry: unknown): unknown => {
-      if (typeof entry === 'string') return this.redact(entry);
-      if (entry === null || typeof entry !== 'object') return entry;
-      if (seen.has(entry)) return seen.get(entry);
-      if (Array.isArray(entry)) {
-        const result: unknown[] = [];
-        seen.set(entry, result);
-        for (const child of entry) result.push(visit(child));
-        return result;
-      }
-      const result: Record<string, unknown> = {};
-      seen.set(entry, result);
-      for (const [key, child] of Object.entries(entry)) {
-        Object.defineProperty(result, this.redact(key), { value: visit(child), enumerable: true, configurable: true });
-      }
-      return result;
-    };
-    return visit(value) as T;
-  }
+  redact(input: string) { return redactWithValues(input, this.secretValues()); }
+  redactValue<T>(value: T): T { return redactValueWithValues(value, this.secretValues()); }
+  private secretValues() { return [...this.entries.values()].map(entry => entry.value); }
 }
 
 export class EncryptedSecretStore extends InMemorySecretStore {

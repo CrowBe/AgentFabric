@@ -2,7 +2,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { connect, type Database } from '@tursodatabase/database';
 import { defaultProfile, RecordStorage, tables, type ConfigChange, type Criteria, type Row, type Table } from './memory.js';
-import type { McpEventOccurrence } from '../types/index.js';
+import type { EventOccurrenceFilter, McpEventOccurrence } from '../types/index.js';
 
 function predicate(criteria: Criteria = {}) {
   const entries = Object.entries(criteria).filter((entry): entry is [string, string] => entry[1] !== undefined);
@@ -75,14 +75,14 @@ export class TursoStorageAdapter extends RecordStorage {
       ...rows.map(([id, row]) => this.upsert(table, id, row)),
     ], 'write');
   }
-  override async listEventOccurrences(filter: { name?: string; afterCursor?: string; limit?: number } = {}): Promise<McpEventOccurrence[]> {
+  override async listEventOccurrences(filter: EventOccurrenceFilter = {}): Promise<McpEventOccurrence[]> {
     const conditions: string[] = [];
     const args: (number | string)[] = [];
     if (filter.name !== undefined) { conditions.push('name = ?'); args.push(filter.name); }
     if (filter.afterCursor !== undefined) { conditions.push('cursor > ?'); args.push(Number(filter.afterCursor)); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const rows: { payload: string }[] = await this.database.all(
-      `SELECT payload FROM event_occurrences ${where} ORDER BY cursor LIMIT ?`, ...args, filter.limit ?? 100,
+      `SELECT payload FROM event_occurrences ${where} ORDER BY cursor ${filter.order === 'desc' ? 'DESC' : 'ASC'} LIMIT ?`, ...args, filter.limit ?? 100,
     );
     return rows.map(row => JSON.parse(row.payload) as McpEventOccurrence);
   }

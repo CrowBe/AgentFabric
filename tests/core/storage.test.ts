@@ -59,6 +59,49 @@ describe.each(['memory', 'turso'])('%s storage', kind => {
       expect(tickets.filter(Boolean)).toEqual([ticket]);
     } finally { await storage.close(); }
   });
+
+  it('reads authorization codes without consuming them and revokes refresh tokens per profile only', async () => {
+    const storage = await open();
+    try {
+      const timestamp = new Date().toISOString();
+      const code = { codeHash: hashToken('code'), clientId: 'client', redirectUri: 'https://client.example/cb', codeChallenge: 'c',
+        codeChallengeMethod: 'S256' as const, scope: 'mcp', profileId: 'default', createdAt: timestamp,
+        expiresAt: new Date(Date.now() + 60_000).toISOString() };
+      await storage.saveOAuthCode(code);
+      expect(await storage.getOAuthCode(code.codeHash)).toEqual(code);
+      expect(await storage.getOAuthCode(code.codeHash)).toEqual(code);
+      expect(await storage.consumeOAuthCode(code.codeHash)).toEqual(code);
+      expect(await storage.getOAuthCode(code.codeHash)).toBeNull();
+
+      const refresh = (name: string, profileId: string) => ({ tokenHash: hashToken(name), clientId: 'client', profileId, scope: 'mcp',
+        createdAt: timestamp, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      const doomed = refresh('doomed', 'gone');
+      const alreadyRevoked = { ...refresh('earlier', 'gone'), revokedAt: 'earlier' };
+      const survivor = refresh('survivor', 'default');
+      for (const row of [doomed, alreadyRevoked, survivor]) await storage.saveOAuthRefreshToken(row);
+      await storage.revokeOAuthRefreshTokensByProfile('gone', 'now');
+      expect(await storage.getOAuthRefreshTokenByHash(doomed.tokenHash)).toMatchObject({ revokedAt: 'now' });
+      expect(await storage.getOAuthRefreshTokenByHash(alreadyRevoked.tokenHash)).toMatchObject({ revokedAt: 'earlier' });
+      expect(await storage.getOAuthRefreshTokenByHash(survivor.tokenHash)).not.toHaveProperty('revokedAt');
+    } finally { await storage.close(); }
+  });
+
+  it('lists event occurrences oldest-first by default and newest-first with a bounded desc order', async () => {
+    const storage = await open();
+    try {
+      for (const cursor of [1, 2, 3, 10, 11]) {
+        await storage.appendEventOccurrence({ eventId: `event-${cursor}`, name: cursor % 2 ? 'odd' : 'even', sourceId: 'gateway',
+          timestamp: new Date(cursor * 1000).toISOString(), data: {}, cursor: String(cursor) });
+      }
+      const cursors = async (filter: Parameters<StorageAdapter['listEventOccurrences']>[0]) =>
+        (await storage.listEventOccurrences(filter)).map(event => event.cursor);
+      expect(await cursors({ limit: 2 })).toEqual(['1', '2']);
+      expect(await cursors({ limit: 2, order: 'asc' })).toEqual(['1', '2']);
+      expect(await cursors({ limit: 2, order: 'desc' })).toEqual(['11', '10']);
+      expect(await cursors({ name: 'odd', order: 'desc' })).toEqual(['11', '3', '1']);
+      expect(await cursors({ afterCursor: '2', order: 'desc', limit: 2 })).toEqual(['11', '10']);
+    } finally { await storage.close(); }
+  });
 });
 
 it('persists encrypted values with restrictive modes and rejects tampering', async () => {

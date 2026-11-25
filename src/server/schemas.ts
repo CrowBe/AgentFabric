@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { upstreamOAuthSchema } from '../validation/upstream-oauth.js';
 import {
   GatewayError,
   type CreatePolicyInput,
@@ -11,7 +12,6 @@ import {
   type UpdateSourceInput,
 } from '../types/index.js';
 
-/** Parse untrusted input; every failure is a 400 `INVALID_INPUT` listing paths, never values. */
 export function parseInput<S extends z.ZodType>(
   schema: S,
   value: unknown,
@@ -43,6 +43,7 @@ export const sourceKind = z.enum([
   'cli_wrapper',
   'composite',
   'skill',
+  'skill_repo',
   'shared_folder',
 ]);
 
@@ -69,6 +70,16 @@ export const sourceConfigSchema: z.ZodType<SourceConfig> = z.discriminatedUnion(
       description: z.string().max(4096),
       command: nonEmpty,
       argsTemplate: stringList,
+      optionalArgs: z
+        .array(
+          z.strictObject({
+            key: nonEmpty,
+            flag: nonEmpty,
+            mode: z.enum(['value', 'flag', 'repeat']).optional(),
+          }),
+        )
+        .max(64)
+        .optional(),
       inputSchema: jsonObject,
       cwd: z.string().max(4096).optional(),
       envAllowlist: stringList.optional(),
@@ -104,6 +115,14 @@ export const sourceConfigSchema: z.ZodType<SourceConfig> = z.discriminatedUnion(
       tags: stringList.optional(),
     }),
     z.strictObject({
+      kind: z.literal('skill_repo'),
+      url: nonEmpty,
+      ref: nonEmpty.optional(),
+      path: nonEmpty.optional(),
+      includeSkills: stringList.optional(),
+      tags: stringList.optional(),
+    }),
+    z.strictObject({
       kind: z.literal('shared_folder'),
       shareName: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i, 'Invalid share name'),
       rootPath: nonEmpty,
@@ -117,12 +136,17 @@ export const sourceConfigSchema: z.ZodType<SourceConfig> = z.discriminatedUnion(
 
 export const authConfigSchema: z.ZodType<SourceAuthConfig> = z.strictObject({
   kind: z.enum(['none', 'bearer_secret', 'header_secret', 'env_secrets', 'oauth2']),
+  oauth: upstreamOAuthSchema.optional(),
   secretName: z.string().max(256).optional(),
   headerName: z.string().max(256).optional(),
   envMap: z.record(z.string(), z.string()).optional(),
   requiredSecrets: stringList.optional(),
   cliLoginCommand: z.string().max(1024).optional(),
   instructions: z.string().max(4096).optional(),
+}).refine(auth => !auth.oauth || auth.kind === 'oauth2', {
+  path: ['oauth'], message: 'Interactive OAuth requires oauth2 auth',
+}).refine(auth => auth.kind !== 'oauth2' || !!auth.oauth || !!auth.secretName, {
+  path: ['secretName'], message: 'Vault secret name is required',
 });
 
 export const refreshPolicySchema = z.strictObject({
@@ -143,6 +167,10 @@ export const createSourceSchema: z.ZodType<CreateSourceInput> = z
   .refine((v) => v.kind === v.config.kind, {
     path: ['config', 'kind'],
     message: 'config.kind must match kind',
+  })
+  .refine((v) => !v.authConfig?.oauth || v.config.kind === 'mcp_http', {
+    path: ['authConfig', 'oauth'],
+    message: 'Interactive OAuth is only supported for mcp_http sources',
   });
 
 export const updateSourceSchema: z.ZodType<UpdateSourceInput> = z
@@ -336,6 +364,7 @@ export const occurrenceQuerySchema = z.strictObject({
   name: z.string().optional(),
   afterCursor: z.string().optional(),
   limit: limit.optional(),
+  order: z.enum(['asc', 'desc']).optional(),
 });
 
 export const telemetrySummaryQuerySchema = z.strictObject({

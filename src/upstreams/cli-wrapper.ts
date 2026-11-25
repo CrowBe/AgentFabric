@@ -59,16 +59,40 @@ async function resolveExecutable(config: CliWrapperSourceConfig, env: Record<str
   throw new GatewayError('UPSTREAM_ERROR', 'Configured CLI executable is unavailable');
 }
 
+function serializeArg(value: unknown): string {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  if (serialized.includes('\0')) throw new GatewayError('INVALID_INPUT', 'CLI arguments cannot contain null bytes');
+  return serialized;
+}
+
 function argv(config: CliWrapperSourceConfig, args: Record<string, unknown>) {
-  return config.argsTemplate.map(template => {
+  const resolved = config.argsTemplate.map(template => {
     const result = template.replaceAll(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => {
       if (!Object.hasOwn(args, key)) throw new GatewayError('INVALID_INPUT', `Missing CLI argument: ${key}`);
-      const value = args[key];
-      return typeof value === 'string' ? value : JSON.stringify(value);
+      return serializeArg(args[key]);
     });
     if (result.includes('\0')) throw new GatewayError('INVALID_INPUT', 'CLI arguments cannot contain null bytes');
     return result;
   });
+  for (const spec of config.optionalArgs ?? []) {
+    if (spec.flag.includes('\0')) throw new GatewayError('INVALID_INPUT', 'CLI arguments cannot contain null bytes');
+    if (!Object.hasOwn(args, spec.key)) continue;
+    const raw = args[spec.key];
+    if (raw === undefined || raw === null) continue;
+    if (spec.mode === 'flag') {
+      if (raw === true) resolved.push(spec.flag);
+    } else if (spec.mode === 'repeat') {
+      if (Array.isArray(raw)) {
+        for (const item of raw) {
+          if (item === undefined || item === null) continue;
+          resolved.push(spec.flag, serializeArg(item));
+        }
+      }
+    } else {
+      resolved.push(spec.flag, serializeArg(raw));
+    }
+  }
+  return resolved;
 }
 
 export async function executeCliWrapper(

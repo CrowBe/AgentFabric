@@ -35,11 +35,6 @@ import { toast } from '@ui-sdk/react/toast';
 import { CheckIcon, ChevronDownIcon, ClipboardCopyIcon, XIcon } from 'lucide-react';
 import { describeError } from '../api';
 
-/**
- * ui-sdk treats a labelled button whose only child element is an icon as icon-only and
- * removes its padding. Wrapping text in a span keeps icon+text buttons (and their
- * accessible names) correctly styled.
- */
 export function Button({ children, ...props }: ComponentProps<typeof UiButton>) {
   if (typeof children === 'function') return <UiButton {...props}>{children}</UiButton>;
   const merged: ReactNode[] = [];
@@ -59,8 +54,6 @@ export function Button({ children, ...props }: ComponentProps<typeof UiButton>) 
   return <UiButton {...props}>{merged}</UiButton>;
 }
 
-/* ---------- data loading ---------- */
-
 export interface Resource<T> {
   data: T | undefined;
   error: string | undefined;
@@ -68,7 +61,6 @@ export interface Resource<T> {
   reload: () => Promise<void>;
 }
 
-/** Load data on mount and when `deps` change; optionally poll quietly. */
 export function useResource<T>(
   fetcher: () => Promise<T>,
   deps: DependencyList,
@@ -106,18 +98,13 @@ export function useResource<T>(
       alive.current = false;
       if (timer) clearInterval(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload, options.intervalMs, ...deps]);
 
   return { data, error, loading, reload };
 }
 
-/* ---------- feedback ---------- */
-
-/** Ask before a destructive or consequential action. Resolves true only on explicit confirm. */
 export const ask = (title: string, description: string, confirmLabel: string): Promise<boolean> =>
   confirm({ title, description, confirmLabel, cancelLabel: 'Cancel' });
-
 
 export const notify = {
   success: (title: string, description?: string) =>
@@ -125,7 +112,6 @@ export const notify = {
   error: (error: unknown) => toast.error(describeError(error), { duration: 10_000 }),
 };
 
-/** Run an async action; toast the outcome. Returns the result or undefined on failure. */
 export async function attempt<T>(action: () => Promise<T>, success?: string): Promise<T | undefined> {
   try {
     const result = await action();
@@ -174,8 +160,6 @@ export function LoadState({ resource, label }: { resource: Resource<unknown>; la
   }
   return null;
 }
-
-/* ---------- display ---------- */
 
 type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'muted';
 
@@ -248,7 +232,6 @@ export interface Column<T> {
   align?: 'end';
 }
 
-/** Semantic table that stacks into labelled cards in narrow containers. */
 export function DataTable<T>({
   caption,
   rows,
@@ -301,8 +284,6 @@ export function DataTable<T>({
   );
 }
 
-/* ---------- clipboard ---------- */
-
 async function writeClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -347,8 +328,6 @@ export function CodeBlock({ text, label }: { text: string; label: string }) {
     </div>
   );
 }
-
-/* ---------- form controls ---------- */
 
 export function TextField({
   label,
@@ -500,8 +479,6 @@ export function SwitchField({
   );
 }
 
-/* ---------- dialogs ---------- */
-
 export function Modal({
   open,
   onClose,
@@ -533,8 +510,6 @@ export function Modal({
     </Dialog>
   );
 }
-
-/* ---------- formatting ---------- */
 
 export function formatTime(iso: string | undefined): string {
   if (!iso) return '—';

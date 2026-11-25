@@ -1,4 +1,4 @@
-import type { McpEventOccurrence } from '../types/index.js';
+import type { EventOccurrenceFilter, McpEventOccurrence } from '../types/index.js';
 import {
   defaultProfile,
   RecordStorage,
@@ -33,10 +33,6 @@ function predicate(criteria: Criteria = {}) {
   };
 }
 
-/**
- * Durable Cloudflare D1 storage adapter extending RecordStorage.
- * Persists gateway state across Worker isolate restarts without local filesystem access.
- */
 export class D1StorageAdapter extends RecordStorage {
   private initPromise?: Promise<void>;
 
@@ -156,7 +152,7 @@ export class D1StorageAdapter extends RecordStorage {
   }
 
   override async listEventOccurrences(
-    filter: { name?: string; afterCursor?: string; limit?: number } = {},
+    filter: EventOccurrenceFilter = {},
   ): Promise<McpEventOccurrence[]> {
     await this.ensureSchema();
     const conditions: string[] = [];
@@ -171,7 +167,7 @@ export class D1StorageAdapter extends RecordStorage {
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { results = [] } = await this.db
-      .prepare(`SELECT payload FROM event_occurrences ${where} ORDER BY cursor LIMIT ?`)
+      .prepare(`SELECT payload FROM event_occurrences ${where} ORDER BY cursor ${filter.order === 'desc' ? 'DESC' : 'ASC'} LIMIT ?`)
       .bind(...args, filter.limit ?? 100)
       .all<{ payload: string }>();
     return results.map((row) => JSON.parse(row.payload) as McpEventOccurrence);

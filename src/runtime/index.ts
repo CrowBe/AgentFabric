@@ -4,9 +4,10 @@ import { GatewayError } from '../types/index.js';
 import { createAuthHandoffs } from '../auth/handoff.js';
 import { authenticateOperator, issueClientToken, randomToken } from '../auth/middleware.js';
 import { createOAuth } from '../auth/oauth.js';
+import { createUpstreamOAuth } from '../auth/upstream-oauth.js';
 import { Approvals } from '../governance/approvals.js';
 import { createLlmAssist } from '../governance/llm-assist.js';
-import { effectiveCatalog, visibleCapability } from '../governance/policy.js';
+import { effectiveCatalog, sourceDenied, visibleCapability } from '../governance/policy.js';
 import { Proposals } from '../governance/proposals.js';
 import { Telemetry } from '../governance/telemetry.js';
 import { Events } from '../mcp/events.js';
@@ -24,6 +25,31 @@ import { emptySchema, validateArguments } from '../validation/schema.js';
 type CompositeState = { path: string[]; budget: { remaining: number } };
 
 function now() { return new Date().toISOString(); }
+
+function resetsUpstreamOAuth(previous: T.SourceRecord, next?: Pick<T.SourceRecord, 'config' | 'authConfig'>) {
+  const oldOAuth = previous.authConfig.oauth;
+  if (!oldOAuth || previous.config.kind !== 'mcp_http') return false;
+  const newOAuth = next?.authConfig.oauth;
+  if (!newOAuth || next.config.kind !== 'mcp_http') return true;
+  return previous.config.url !== next.config.url
+    || (['authorizationEndpoint', 'tokenEndpoint', 'registrationEndpoint', 'clientId', 'clientSecretName',
+      'tokenEndpointAuthMethod', 'resource'] as const).some(key => oldOAuth[key] !== newOAuth[key]);
+}
+
+function executionTarget(config: T.SourceConfig) {
+  switch (config.kind) {
+    case 'mcp_http': return [config.url];
+    case 'mcp_stdio': return [config.command, config.args, config.cwd];
+    case 'cli_wrapper': return [config.command, config.argsTemplate, config.cwd];
+    case 'skill_repo': return [config.url, config.ref, config.path];
+    case 'shared_folder': return [config.rootPath, config.shareName];
+    default: return [];
+  }
+}
+
+function retargets(previous: T.SourceConfig, next: T.SourceConfig) {
+  return previous.kind !== next.kind || JSON.stringify(executionTarget(previous)) !== JSON.stringify(executionTarget(next));
+}
 
 export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T.GatewayRuntime> {
   const { mode, homeDir } = options;
@@ -59,10 +85,13 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     manager = upstreams;
     if (!await storage.getProfile('default')) await storage.upsertProfile(defaultProfile());
     await events.initialize();
-    const sources = await storage.listSources();
+    const [sources, cachedCapabilities] = await Promise.all([storage.listSources(), storage.listCapabilities()]);
+    const hasCaps = new Set(cachedCapabilities.map(cap => cap.sourceId));
     for (const source of sources) manager.schedule(source);
     await manager.refreshAll(sources.filter(source => source.enabled &&
-      (source.refreshPolicy.mode === 'interval' || !['mcp_stdio', 'mcp_http'].includes(source.kind))));
+      (source.refreshPolicy.mode === 'interval' ||
+        (!['mcp_stdio', 'mcp_http', 'skill_repo'].includes(source.kind)) ||
+        (source.kind === 'skill_repo' && !hasCaps.has(source.id)))));
     await runtime.listApprovals('pending');
     return runtime;
   } catch (error) {
@@ -76,7 +105,9 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     const emitCatalog = (sourceId?: string, profileId?: string) => eventService.emit({
       name: 'fabric.catalog.changed', sourceId, data: { ...(sourceId ? { sourceId } : {}), ...(profileId ? { profileId } : {}) },
     }).catch(() => {});
-    const upstreams = new UpstreamManager(storage, secrets, mode, homeDir, event => eventService.emit(event), handoffs.issue);
+    const upstreamOAuth = createUpstreamOAuth({ storage, secrets, publicUrl, fetchImpl: options.oauthFetch,
+      allowInsecureLocalOAuth: options.allowInsecureLocalOAuth });
+    const upstreams = new UpstreamManager(storage, secrets, mode, homeDir, event => eventService.emit(event), handoffs.issue, upstreamOAuth);
     const eventService = new Events(storage, secrets, upstreams);
     const approvals = new Approvals(storage, secrets, publicUrl, approvalTimeout, (name, approval) => eventService.emit({
       name, sourceId: approval.sourceId,
@@ -90,7 +121,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     const llm = createLlmAssist(secrets, options.llm);
     const oauth = createOAuth(storage, publicUrl);
     let closing: Promise<void> | undefined;
-    let connecting: Promise<unknown> | undefined;
+    const connecting = new Map<string, Promise<unknown>>();
     const sourceCreates = new Set<string>();
     let profileMutation: Promise<unknown> = Promise.resolve();
 
@@ -100,13 +131,25 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       return next;
     }
 
-    async function onConnect() {
-      if (!connecting) {
-        connecting = storage.listSources().then(sources =>
-          upstreams.refreshAll(sources.filter(source => source.enabled && source.refreshPolicy.mode === 'on_connect')))
-          .finally(() => { connecting = undefined; });
-      }
-      await connecting;
+    function refreshOnConnect(sourceId: string) {
+      const inflight = connecting.get(sourceId);
+      if (inflight) return inflight;
+      const pending: Promise<unknown> = upstreams.refresh(sourceId).catch(() => {})
+        .finally(() => { if (connecting.get(sourceId) === pending) connecting.delete(sourceId); });
+      connecting.set(sourceId, pending);
+      return pending;
+    }
+
+    async function onConnect(profileId: string) {
+      const active = await profile(profileId);
+      const [sources, policies, effective] = await Promise.all([storage.listSources(), storage.listPolicies(), catalog(active.id)]);
+      const reachable = (source: T.SourceRecord) => {
+        if (sourceDenied(active, policies, source.id)) return false;
+        const discovered = effective.filter(cap => cap.sourceId === source.id);
+        return discovered.length === 0 || discovered.some(visibleCapability);
+      };
+      await Promise.all(sources.filter(source => source.enabled && source.refreshPolicy.mode === 'on_connect' && reachable(source))
+        .map(source => refreshOnConnect(source.id)));
     }
 
     async function profile(idOrName = 'default') {
@@ -155,18 +198,21 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
             sourceId: source.id, capabilityId: cap.id,
             toolName: cap.exposedName, reason: 'Operator approval is required by profile policy' }, args, context.signal);
         }
-        const [fresh, raw, latest] = await Promise.all([catalog(context.profileId), capability(cap.id), upstreams.source(cap.sourceId)]);
-        const effective = fresh.find(item => item.id === cap.id);
-        if (!effective || !visibleCapability(effective) || effective.permission !== cap.permission || source.updatedAt !== latest.updatedAt) {
-          throw new GatewayError('CAPABILITY_DENIED', 'Capability or policy changed before execution');
-        }
-        validateArguments(effective.inputSchema ?? emptySchema, args);
-        if (cap.permission === 'require_approval' && !await eventService.identityActive(context.identity)) {
-          throw new GatewayError('FORBIDDEN', 'Client access was revoked');
-        }
-        if (context.signal?.aborted) throw new GatewayError('APPROVAL_TIMEOUT', 'Caller cancelled before execution');
-        if (closing) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Gateway is closing');
-        liveSource(latest);
+        const verifyStillAllowed = async (expectedUpdatedAt: string) => {
+          if (!await eventService.identityActive(context.identity)) throw new GatewayError('FORBIDDEN', 'Client access was revoked');
+          const [fresh, current] = await Promise.all([catalog(context.profileId), upstreams.source(cap.sourceId)]);
+          const effective = fresh.find(item => item.id === cap.id);
+          if (!effective || !visibleCapability(effective) || effective.permission !== cap.permission || current.updatedAt !== expectedUpdatedAt) {
+            throw new GatewayError('CAPABILITY_DENIED', 'Capability or policy changed before execution');
+          }
+          validateArguments(effective.inputSchema ?? emptySchema, args);
+          if (context.signal?.aborted) throw new GatewayError('APPROVAL_TIMEOUT', 'Caller cancelled before execution');
+          if (closing) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Gateway is closing');
+          liveSource(current);
+          return current;
+        };
+        const [latest, raw] = await Promise.all([verifyStillAllowed(source.updatedAt), capability(cap.id)]);
+        const beforeExecute = async () => { await verifyStillAllowed(latest.updatedAt); };
         const callArgs = resourceUri === undefined ? args : { ...args, uri: resourceUri };
         const result = await upstreams.invoke(latest, raw, callArgs, async (name, nestedArgs) => {
           const visible = (await catalog(context.profileId)).filter(visibleCapability);
@@ -178,12 +224,12 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
             throw new GatewayError('UPSTREAM_ERROR', 'Composite step returned an error');
           }
           return output;
-        });
+        }, context, beforeExecute);
         return secrets.redactValue(result);
       });
     }
 
-    const gateway = new McpGateway(storage, secrets, catalog, invoke, proposals, telemetry, eventService);
+    const gateway = new McpGateway(storage, secrets, catalog, invoke, proposals, telemetry, eventService, publicUrl);
     const transport = new McpTransport(storage, secrets, publicUrl, gateway, onConnect);
 
     async function saveSource(input: T.CreateSourceInput, proposalActivation = false) {
@@ -198,12 +244,30 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       sourceCreates.add(id);
       try {
         if (await storage.getSource(id)) throw new GatewayError('CONFLICT', 'Source already exists');
-        const source: T.SourceRecord = { ...validated, health: validated.enabled ? 'initializing' : 'disabled', createdAt: now(), updatedAt: now() };
+        const interactive = !!validated.authConfig.oauth;
+        const source: T.SourceRecord = { ...validated, createdAt: now(), updatedAt: now(),
+          health: validated.enabled ? (interactive ? 'auth_required' : 'initializing') : 'disabled' };
         await storage.upsertSource(source);
         upstreams.schedule(source);
-        if (source.enabled && !proposalActivation) await upstreams.refreshAll([source]);
+        if (source.enabled && !proposalActivation && !interactive) await upstreams.refreshAll([source]);
         return upstreams.source(id);
       } finally { sourceCreates.delete(id); }
+    }
+
+    async function revokeProfileCredentials(profileIds: string[]) {
+      if (!profileIds.length) return;
+      const revokedAt = now();
+      const removed = new Set(profileIds);
+      for (const token of await storage.listClientTokens()) {
+        if (removed.has(token.profileId) && !token.revokedAt) await storage.revokeClientToken(token.id, revokedAt);
+      }
+      for (const profileId of profileIds) await storage.revokeOAuthRefreshTokensByProfile(profileId, revokedAt);
+    }
+
+    async function httpSource(id: string) {
+      const source = await upstreams.source(id);
+      if (source.config.kind !== 'mcp_http') throw new GatewayError('INVALID_INPUT', 'Upstream OAuth requires an mcp_http source');
+      return source;
     }
 
     const runtime: T.GatewayRuntime = {
@@ -216,6 +280,41 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         const source = await handoffs.complete(id, ticket, credentials);
         await upstreams.refreshAll([source]);
         return { source: await upstreams.source(id) };
+      },
+      async getUpstreamOAuthStatus(id) {
+        return upstreamOAuth.getStatus(await httpSource(id));
+      },
+      async startUpstreamOAuth(id, opts) {
+        const source = await httpSource(id);
+        if (source.authConfig.kind !== 'oauth2' || !source.authConfig.oauth) {
+          throw new GatewayError('INVALID_INPUT', 'Source is not configured for upstream OAuth');
+        }
+        const ticket = opts?.ticket;
+        if (!ticket && opts?.clientSecret !== undefined) {
+          throw new GatewayError('INVALID_INPUT', 'An auth ticket is required to submit a client secret');
+        }
+        return upstreamOAuth.startAuthorization(source, ticket
+          ? current => handoffs.consumeForOAuth(current, ticket, opts?.clientSecret) : undefined);
+      },
+      async completeUpstreamOAuth(params) {
+        const { source } = await upstreamOAuth.completeAuthorization(params);
+        try {
+          const refreshed = await upstreams.refresh(source.id);
+          return { source: refreshed.source, capabilityCount: refreshed.capabilities.length };
+        } catch (error) {
+          return { source: await upstreams.source(source.id), capabilityCount: 0,
+            refreshError: secrets.redact(error instanceof Error ? error.message : 'Source refresh failed') };
+        }
+      },
+      async disconnectUpstreamOAuth(id) {
+        await upstreams.mutate(id, async () => {
+          const source = await httpSource(id);
+          if (!source.authConfig.oauth) throw new GatewayError('INVALID_INPUT', 'Source is not configured for upstream OAuth');
+          await upstreamOAuth.disconnect(id, () => storage.upsertSource({ ...source, health: source.enabled ? 'auth_required' : 'disabled',
+            lastError: source.enabled ? 'Upstream OAuth disconnected' : undefined,
+            updatedAt: new Date(Math.max(Date.now(), Date.parse(source.updatedAt) + 1)).toISOString() }));
+        });
+        await emitCatalog(id);
       },
       listSources: () => storage.listSources(),
       getSource: id => storage.getSource(id),
@@ -233,7 +332,13 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
           if (validated.config.kind === 'composite') validateComposite(validated.config);
           updated = { ...source, ...validated, health: validated.enabled ? 'initializing' : 'disabled',
             updatedAt: new Date(Math.max(Date.now(), Date.parse(source.updatedAt) + 1)).toISOString() };
-          await storage.upsertSource(updated);
+          if (retargets(source.config, updated.config)) {
+            await storage.replaceSourceCapabilities(id, []);
+            await storage.deleteEventTypesBySource(id);
+          }
+          if (resetsUpstreamOAuth(source, updated)) {
+            await upstreamOAuth.disconnect(id, () => storage.upsertSource(updated));
+          } else await storage.upsertSource(updated);
           upstreams.schedule(updated);
         });
         await upstreams.refreshAll([updated]);
@@ -244,7 +349,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
         await upstreams.mutate(id, async () => {
           await upstreams.source(id);
           upstreams.unschedule(id);
-          await storage.deleteSource(id);
+          await upstreamOAuth.disconnect(id, () => storage.deleteSource(id));
         });
         await emitCatalog(id);
       },
@@ -268,6 +373,27 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
           (filter?.sourceId === undefined || cap.sourceId === filter.sourceId) &&
           (filter?.kind === undefined || cap.kind === filter.kind) &&
           (!query || [cap.exposedName, cap.description, cap.semanticGroup, ...cap.tags].some(field => field.toLowerCase().includes(query))));
+      },
+      async getCapabilityContent(id) {
+        const cap = await capability(id);
+        const source = await upstreams.source(cap.sourceId);
+        if (source.config.kind === 'skill') {
+          return secrets.redactValue({
+            uri: cap.uri ?? `skill://${source.config.slug}`,
+            mimeType: cap.mimeType ?? 'text/markdown',
+            content: source.config.content,
+          });
+        }
+        if (source.config.kind === 'skill_repo' && typeof cap.metadata?.skillContent === 'string') {
+          const files = cap.metadata.skillFiles as Record<string, string> | undefined;
+          return secrets.redactValue({
+            uri: cap.uri ?? `skill://${cap.originalName}`,
+            mimeType: cap.mimeType ?? 'text/markdown',
+            content: cap.metadata.skillContent,
+            ...(files && Object.keys(files).length > 0 ? { files } : {}),
+          });
+        }
+        throw new GatewayError('NOT_FOUND', 'Capability has no previewable skill content');
       },
       async draftOverlay(id, guidance) {
         return secrets.redactValue(await llm.draftOverlay(await capability(id), guidance));
@@ -308,9 +434,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       deleteProfile: id => editProfiles(async () => {
         const record = await profile(id);
         if (record.id === 'default') throw new GatewayError('CONFLICT', 'Cannot delete the default profile');
-        for (const token of await storage.listClientTokens()) if (token.profileId === record.id && !token.revokedAt) {
-          await storage.revokeClientToken(token.id, now());
-        }
+        await revokeProfileCredentials([record.id]);
         await storage.deleteProfile(record.id);
       }),
       listTokens: () => storage.listClientTokens(),
@@ -367,7 +491,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       rejectProposal: (id, note) => proposals.reject(id, note),
       listEventTypes: profileId => eventService.listTypes(profileId),
       listEventSubscriptions: profileId => eventService.listSubscriptions(profileId),
-      listEventOccurrences: filter => storage.listEventOccurrences(filter),
+      listEventOccurrences: (filter?: T.EventOccurrenceFilter) => storage.listEventOccurrences(filter),
       emitEvent: input => eventService.emit(input),
       deleteEventSubscription: id => eventService.delete(id),
       getTelemetrySummary: filter => telemetry.summarize(filter),
@@ -378,8 +502,18 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       },
       exportConfig: () => exportConfig(storage, secrets),
       async importConfig(bundle, importOptions) {
-        const result = await editProfiles(() => upstreams.reconfigure(() =>
-          importConfig(storage, secrets, bundle, importOptions?.merge ?? false, mode, importOptions?.enableExecutables ?? false)));
+        const result = await editProfiles(() => upstreams.reconfigure(async () => {
+          const [previous, previousProfiles] = await Promise.all([storage.listSources(), storage.listProfiles()]);
+          const result = await importConfig(storage, secrets, bundle, importOptions?.merge ?? false, mode,
+            importOptions?.enableExecutables ?? false);
+          const retained = new Set((await storage.listProfiles()).map(item => item.id));
+          await revokeProfileCredentials(previousProfiles.map(item => item.id).filter(profileId => !retained.has(profileId)));
+          const next = new Map((await storage.listSources()).map(source => [source.id, source]));
+          for (const source of previous) {
+            if (resetsUpstreamOAuth(source, next.get(source.id))) await upstreamOAuth.disconnect(source.id);
+          }
+          return result;
+        }));
         const current = await storage.listSources();
         await upstreams.refreshAll(current.filter(source => source.enabled &&
           (source.refreshPolicy.mode !== 'manual' || !['mcp_stdio', 'mcp_http'].includes(source.kind))));

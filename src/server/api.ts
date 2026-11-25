@@ -63,7 +63,6 @@ function requireFound<T>(value: T | null | undefined, what: string, id: string):
   return value;
 }
 
-/** Operator-only REST API. Authentication is enforced by `createOperatorGuard`. */
 export function createOperatorGuard(runtime: GatewayRuntime): MiddlewareHandler {
   return async (c, next) => {
     let allowed = false;
@@ -95,10 +94,8 @@ export function createApi(runtime: GatewayRuntime): Hono {
     }),
   );
 
-  // Status
   api.get('/status', async (c) => c.json(await runtime.getStatus()));
 
-  // Sources
   api.get('/sources', async (c) => c.json({ sources: await runtime.listSources() }));
   api.post('/sources', async (c) => {
     const input = await readJson(c, createSourceSchema);
@@ -123,7 +120,15 @@ export function createApi(runtime: GatewayRuntime): Hono {
     c.json(await runtime.testSource(c.req.param('id'))),
   );
 
-  // Starter recipes
+  api.get('/sources/:id/oauth', async (c) =>
+    c.json({ oauth: await runtime.getUpstreamOAuthStatus(c.req.param('id')) }));
+  api.post('/sources/:id/oauth/start', async (c) =>
+    c.json(await runtime.startUpstreamOAuth(c.req.param('id'))));
+  api.delete('/sources/:id/oauth', async (c) => {
+    await runtime.disconnectUpstreamOAuth(c.req.param('id'));
+    return c.json({ ok: true });
+  });
+
   api.get('/recipes', (c) => c.json({ recipes: listRecipes() }));
   api.post('/recipes/:id/instantiate', async (c) => {
     const id = c.req.param('id');
@@ -140,11 +145,13 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ source: await runtime.createSource(checked) }, 201);
   });
 
-  // Capability pool and normalisation overlays
   api.get('/capabilities', async (c) =>
     c.json({
       capabilities: await runtime.listCapabilities(parseQuery(c, capabilityQuerySchema)),
     }),
+  );
+  api.get('/capabilities/:id/content', async (c) =>
+    c.json(await runtime.getCapabilityContent(c.req.param('id'))),
   );
   api.post('/capabilities/:id/overlay/draft', async (c) => {
     const { guidance } = await readJson(c, overlayDraftSchema, { optional: true });
@@ -159,7 +166,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ ok: true });
   });
 
-  // Profiles
   api.get('/profiles', async (c) => c.json({ profiles: await runtime.listProfiles() }));
   api.post('/profiles', async (c) => {
     const input = await readJson(c, createProfileSchema);
@@ -185,7 +191,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     );
   });
 
-  // Tokens and OAuth clients
   api.get('/tokens', async (c) => c.json({ tokens: await runtime.listTokens() }));
   api.post('/tokens', async (c) => {
     const input = await readJson(c, createTokenSchema);
@@ -203,7 +208,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ ok: true });
   });
 
-  // Secrets are write-only: values are accepted here and never returned.
   api.get('/secrets', async (c) => c.json({ secrets: await runtime.listSecrets() }));
   api.put('/secrets/:name', async (c) => {
     const name = parseInput(secretNameSchema, c.req.param('name'), 'secret name');
@@ -216,7 +220,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ ok: true });
   });
 
-  // Safety policies
   api.get('/policies', async (c) => c.json({ policies: await runtime.listPolicies() }));
   api.post('/policies/draft', async (c) => {
     const input = await readJson(c, draftPolicySchema);
@@ -231,7 +234,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ ok: true });
   });
 
-  // Approvals
   api.get('/approvals', async (c) => {
     const { status } = parseQuery(c, statusQuerySchema);
     return c.json({ approvals: await runtime.listApprovals(status) });
@@ -267,7 +269,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     });
   });
 
-  // Capability proposals (human-in-the-loop activation gate)
   api.get('/proposals', async (c) => {
     const { status } = parseQuery(c, proposalQuerySchema);
     return c.json({ proposals: await runtime.listProposals(status) });
@@ -281,7 +282,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ proposal: await runtime.rejectProposal(c.req.param('id'), note) });
   });
 
-  // MCP Events
   api.get('/events/types', async (c) => {
     const { profileId } = parseQuery(c, profileQuerySchema);
     return c.json({ eventTypes: await runtime.listEventTypes(profileId) });
@@ -304,7 +304,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ occurrence: await runtime.emitEvent(input) }, 201);
   });
 
-  // Telemetry
   api.get('/telemetry/summary', async (c) =>
     c.json(await runtime.getTelemetrySummary(parseQuery(c, telemetrySummaryQuerySchema))),
   );
@@ -318,7 +317,6 @@ export function createApi(runtime: GatewayRuntime): Hono {
     return c.json({ hints: await runtime.getCurationHints(profileId) });
   });
 
-  // Portable, secret-free configuration
   api.get('/config/export', async (c) => c.json(await runtime.exportConfig()));
   api.post('/config/import', async (c) => {
     const { bundle, merge, enableExecutables } = await readJson(c, importConfigSchema);

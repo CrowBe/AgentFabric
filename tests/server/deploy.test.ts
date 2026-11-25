@@ -9,12 +9,32 @@ import { createMockRuntime } from '../../src/testing/mock-runtime.js';
 import type { RuntimeOptions } from '../../src/types/index.js';
 
 describe('starter recipes', () => {
-  it('only ships the six generic recipes with operator-agnostic defaults', () => {
+  it('only ships the eight generic recipes with operator-agnostic defaults', () => {
     const ids = listRecipes().map((r) => r.id);
-    expect(ids).toHaveLength(6);
-    expect(new Set(ids).size).toBe(6);
+    expect(ids).toHaveLength(8);
+    expect(new Set(ids).size).toBe(8);
     const text = JSON.stringify(listRecipes());
     expect(text).not.toMatch(/crowbe|gmail|slack|github\.com\/[a-z]/i);
+  });
+
+  it('builds an OAuth source with manual refresh and parses authorization parameters', () => {
+    const defaults = { name: 'Remote', url: 'https://example.com/mcp' };
+    expect(instantiateRecipe('mcp-http-oauth', defaults).input).toMatchObject({
+      kind: 'mcp_http', authConfig: { kind: 'oauth2', oauth: {} }, refreshPolicy: { mode: 'manual' },
+    });
+    const { input } = instantiateRecipe('mcp-http-oauth', {
+      ...defaults, scopes: 'read, write', clientId: 'client', clientSecretName: 'vault-name',
+      authorizationEndpoint: 'https://auth.example.com/authorize', tokenEndpoint: 'https://auth.example.com/token',
+      extraAuthParams: 'access_type=offline\nprompt=consent\nlogin_hint=subject=a',
+    });
+    expect(input.authConfig?.oauth).toEqual({
+      scopes: ['read', 'write'], clientId: 'client', clientSecretName: 'vault-name',
+      authorizationEndpoint: 'https://auth.example.com/authorize', tokenEndpoint: 'https://auth.example.com/token',
+      extraAuthParams: { access_type: 'offline', prompt: 'consent', login_hint: 'subject=a' },
+    });
+    for (const extraAuthParams of ['prompt', '=value', ['client_id=override'], ['access_token=raw'], 1]) {
+      expect(() => instantiateRecipe('mcp-http-oauth', { ...defaults, extraAuthParams })).toThrow();
+    }
   });
 
   it('builds read-only defaults for CLI wrappers and shared folders', () => {
@@ -233,9 +253,8 @@ describe('cloudflare worker adapter', () => {
     expect(await health.json()).toEqual({ ok: true, mode: 'remote', version: '0.1.0' });
   });
 
-  it('persists gateway state via Cloudflare D1StorageAdapter', async () => {
+  const sqliteD1 = async () => {
     const { DatabaseSync } = await import('node:sqlite');
-    const { D1StorageAdapter } = await import('../../src/storage/d1.js');
     const sqlite = new DatabaseSync(':memory:');
     const wrap = (query: string, bound: unknown[] = []) => ({
       bind: (...values: unknown[]) => wrap(query, values),
@@ -250,12 +269,20 @@ describe('cloudflare worker adapter', () => {
       prepare: (query: string) => wrap(query),
       batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
     };
+    return { sqlite, d1 };
+  };
+  const operator = { authorization: 'Bearer cf-token', 'content-type': 'application/json' };
+  const masterKey = 'cf-master-key-0123456789abcdef';
+
+  it('persists gateway state via Cloudflare D1StorageAdapter', async () => {
+    const { D1StorageAdapter } = await import('../../src/storage/d1.js');
+    const { sqlite, d1 } = await sqliteD1();
     const worker = createWorker();
-    const d1Env = { ...env, DB: d1 };
+    const d1Env = { ...env, AGENTFABRIC_MASTER_KEY: masterKey, DB: d1 };
     const created = await worker.fetch(
       new Request('https://x.dev/api/profiles', {
         method: 'POST',
-        headers: { authorization: 'Bearer cf-token', 'content-type': 'application/json' },
+        headers: operator,
         body: JSON.stringify({ name: 'd1-profile' }),
       }),
       d1Env,
@@ -264,6 +291,72 @@ describe('cloudflare worker adapter', () => {
 
     const reopened = await D1StorageAdapter.open(d1);
     expect(await reopened.getProfile('d1-profile')).toMatchObject({ name: 'd1-profile' });
+    sqlite.close();
+  });
+
+  it('orders D1 event occurrences ascending by default and descending on request', async () => {
+    const { D1StorageAdapter } = await import('../../src/storage/d1.js');
+    const { sqlite, d1 } = await sqliteD1();
+    const storage = await D1StorageAdapter.open(d1);
+    for (const cursor of [1, 2, 10]) {
+      await storage.appendEventOccurrence({ eventId: `e${cursor}`, name: 'tick', sourceId: 'gateway',
+        timestamp: new Date(cursor * 1000).toISOString(), data: {}, cursor: String(cursor) });
+    }
+    expect((await storage.listEventOccurrences({ limit: 2 })).map((event) => event.cursor)).toEqual(['1', '2']);
+    expect((await storage.listEventOccurrences({ limit: 2, order: 'desc' })).map((event) => event.cursor)).toEqual(['10', '2']);
+    sqlite.close();
+  });
+
+  it('routes every Worker request through the gateway so UI security headers always apply', async () => {
+    const config = JSON.parse(await readFile(path.join(process.cwd(), 'wrangler.jsonc'), 'utf8'));
+    expect(config.assets).toMatchObject({ binding: 'ASSETS', run_worker_first: true });
+  });
+
+  it('fails closed before boot when DB is bound without AGENTFABRIC_MASTER_KEY', async () => {
+    const { sqlite, d1 } = await sqliteD1();
+    for (const key of [undefined, '', '   ']) {
+      const res = await createWorker().fetch(
+        new Request('https://x.dev/healthz'),
+        { ...env, DB: d1, ...(key === undefined ? {} : { AGENTFABRIC_MASTER_KEY: key }) },
+      );
+      expect(res.status).toBe(503);
+      expect(await res.text()).toContain('AGENTFABRIC_MASTER_KEY');
+    }
+    expect(sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([]);
+    sqlite.close();
+  });
+
+  it('persists encrypted secrets in D1 across Worker isolates', async () => {
+    const { sqlite, d1 } = await sqliteD1();
+    const d1Env = { ...env, AGENTFABRIC_MASTER_KEY: masterKey, DB: d1 };
+    const put = await createWorker().fetch(
+      new Request('https://x.dev/api/secrets/upstream-token', {
+        method: 'PUT',
+        headers: operator,
+        body: JSON.stringify({ value: 'durable-secret-value', description: 'Upstream API' }),
+      }),
+      d1Env,
+    );
+    expect(put.status).toBe(200);
+    expect(JSON.stringify(sqlite.prepare('SELECT * FROM secrets_vault').all())).not.toContain('durable-secret-value');
+
+    const listed = await createWorker().fetch(
+      new Request('https://x.dev/api/secrets', { headers: operator }),
+      d1Env,
+    );
+    expect(listed.status).toBe(200);
+    const body = await listed.text();
+    expect(JSON.parse(body).secrets).toMatchObject([{ name: 'upstream-token', description: 'Upstream API' }]);
+    expect(body).not.toContain('durable-secret-value');
+
+    const wrongKey = await createWorker().fetch(
+      new Request('https://x.dev/api/secrets', { headers: operator }),
+      { ...d1Env, AGENTFABRIC_MASTER_KEY: 'a-different-master-key' },
+    );
+    expect(wrongKey.status).toBe(503);
+    const wrongBody = await wrongKey.text();
+    expect(wrongBody).toContain('Gateway failed to start');
+    expect(wrongBody).not.toMatch(/durable-secret-value|upstream-token|a-different-master-key/);
     sqlite.close();
   });
 });

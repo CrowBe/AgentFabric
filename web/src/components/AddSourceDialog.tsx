@@ -6,11 +6,12 @@ import {
   CUSTOM_FIELDS,
   DynamicForm,
   KIND_LABELS,
+  OAUTH_FIELD_NAMES,
   buildCustomSource,
   initialValues,
   type FormValues,
 } from './source-forms';
-import { Button, Modal, Notice, Pill, SelectField, notify, useResource } from './ui';
+import { Button, CopyButton, Modal, Notice, Pill, SelectField, notify, useResource } from './ui';
 
 export interface AddSourceInitial {
   tab: 'recipe' | 'custom';
@@ -23,12 +24,14 @@ export function AddSourceDialog({
   onClose,
   onCreated,
   mode,
+  publicUrl,
   initial = { tab: 'recipe' },
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (source: SourceRecord) => void;
   mode: GatewayMode;
+  publicUrl?: string;
   initial?: AddSourceInitial;
 }) {
   const recipes = useResource(() => api.recipes(), []);
@@ -56,11 +59,24 @@ export function AddSourceDialog({
 
   useEffect(() => {
     if (recipe) setRecipeValues(initialValues(recipe.fields));
-    // Reset the form only when the chosen recipe changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipe?.id]);
 
   const blockedByMode = tab === 'recipe' && recipe?.localOnly && mode === 'remote';
+  const customOAuth = kind === 'mcp_http' && Boolean(customValues.useOAuth);
+  const customFields =
+    kind === 'mcp_http' && !customOAuth
+      ? CUSTOM_FIELDS[kind].filter((field) => !OAUTH_FIELD_NAMES.has(field.name))
+      : CUSTOM_FIELDS[kind];
+  const callbackUrl = publicUrl ? `${publicUrl.replace(/\/+$/, '')}/auth/oauth/callback` : '/auth/oauth/callback';
+  const callbackNotice = (
+    <Notice tone="info" title="OAuth callback URL">
+      <div className="row wrap">
+        <code>{callbackUrl}</code>
+        <CopyButton text={callbackUrl} label="OAuth callback URL" />
+      </div>
+      <p>Pre-registered OAuth clients must register this exact Redirect URI with their provider.</p>
+    </Notice>
+  );
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -124,6 +140,7 @@ export function AddSourceDialog({
                     values={recipeValues}
                     onChange={(key, value) => setRecipeValues((c) => ({ ...c, [key]: value }))}
                   />
+                  {recipe.id === 'mcp-http-oauth' ? callbackNotice : null}
                 </>
               ) : null}
             </div>
@@ -140,10 +157,11 @@ export function AddSourceDialog({
                 options={(Object.keys(KIND_LABELS) as SourceKind[]).map((k) => ({ value: k, label: KIND_LABELS[k] }))}
               />
               <DynamicForm
-                fields={CUSTOM_FIELDS[kind]}
+                fields={customFields}
                 values={customValues}
                 onChange={(key, value) => setCustomValues((c) => ({ ...c, [key]: value }))}
               />
+              {customOAuth ? callbackNotice : null}
               <SelectField
                 label="Refresh policy"
                 value={refreshMode}

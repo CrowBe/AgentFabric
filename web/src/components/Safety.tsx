@@ -128,7 +128,7 @@ function ProposalQueue() {
   return (
     <Card
       title="Capability proposals"
-      description="Agents can draft CLI wrappers or composite tools to fill gaps. Nothing runs until you activate it."
+      description="Agents can propose CLI wrappers, composite tools, skills, or GitHub skill repos. Nothing activates until you approve it."
     >
       <LoadState resource={proposals} label="proposals" />
       <DataTable

@@ -15,7 +15,6 @@ interface RequestOptions {
   lookup: (host: string, options: { all: true }, found: (error: Error | null, addresses: Delivery['addresses']) => void) => void;
 }
 
-// The gateway still resolves and pins DNS. This fixture replaces the external TLS socket.
 export function webhookRequest(attempts: string[], deliveries: Delivery[]) {
   return (url: URL, options: RequestOptions, receive: (response: EventEmitter & { statusCode: number }) => void) => {
     attempts.push(url.href);

@@ -1,7 +1,10 @@
 import { z } from 'zod';
+import { isManagedOAuthSecretName, upstreamOAuthSchema } from '../validation/upstream-oauth.js';
+import { sourceSecretNames } from '../auth/handoff.js';
 import { GatewayError, type GatewayMode, type PortableConfigBundle, type SecretStore, type StorageAdapter } from '../types/index.js';
 import { defaultProfile, RecordStorage, type ConfigChange } from './memory.js';
 import { redactPatterns } from './secrets.js';
+import { parseGitHubSkillUrl } from '../upstreams/github-skills.js';
 
 const id = z.string().min(1);
 const text = z.string();
@@ -15,16 +18,25 @@ const capabilityKind = z.enum(['tool', 'prompt', 'resource', 'skill']);
 const executable = { command: id, cwd: optionalText, envAllowlist: strings.optional(), timeoutMs: z.int().positive().optional() };
 const tool = { toolName: id, description: text, inputSchema: record };
 
+const optionalArgSchema = z.strictObject({
+  key: id,
+  flag: id,
+  mode: z.enum(['value', 'flag', 'repeat']).optional(),
+});
+
 export const sourceConfigSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('mcp_stdio'), ...executable, args: strings }),
   z.strictObject({ kind: z.literal('mcp_http'), url: z.url({ protocol: /^https?$/ }), headers: z.record(z.string(), text).optional(), timeoutMs: executable.timeoutMs }),
   z.strictObject({ kind: z.literal('cli_wrapper'), ...executable, ...tool, argsTemplate: strings,
+    optionalArgs: z.array(optionalArgSchema).max(64).optional(),
     maxOutputBytes: z.int().positive().optional(), outputMode: z.enum(['text', 'json']).optional(), authCheckArgs: strings.optional() }),
   z.strictObject({ kind: z.literal('composite'), ...tool, steps: z.array(z.strictObject({
     id, capability: id, argumentsTemplate: record,
   })).min(1).max(100), outputTemplate: z.unknown().optional(), maxSteps: z.int().min(1).max(100).optional() }),
   z.strictObject({ kind: z.literal('skill'), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), title: id,
     description: text, content: text, tags: strings.optional() }),
+  z.strictObject({ kind: z.literal('skill_repo'), url: id, ref: optionalText, path: optionalText,
+    includeSkills: strings.optional(), tags: strings.optional() }),
   z.strictObject({ kind: z.literal('shared_folder'), shareName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/),
     rootPath: id, readOnly: z.boolean(), maxFileBytes: z.int().positive().optional(),
     allowedExtensions: strings.optional(), description: optionalText }),
@@ -32,10 +44,14 @@ export const sourceConfigSchema = z.discriminatedUnion('kind', [
 
 const authSchema = z.strictObject({
   kind: z.enum(['none', 'bearer_secret', 'header_secret', 'env_secrets', 'oauth2']),
+  oauth: upstreamOAuthSchema.optional(),
   secretName: optionalText, headerName: optionalText, envMap: z.record(z.string(), id).optional(),
   requiredSecrets: strings.optional(), cliLoginCommand: optionalText, instructions: optionalText,
 }).superRefine((auth, ctx) => {
-  if (['bearer_secret', 'header_secret', 'oauth2'].includes(auth.kind) && !auth.secretName) {
+  if (auth.oauth && auth.kind !== 'oauth2') {
+    ctx.addIssue({ code: 'custom', path: ['oauth'], message: 'Interactive OAuth requires oauth2 auth' });
+  }
+  if ((auth.kind === 'bearer_secret' || auth.kind === 'header_secret' || (auth.kind === 'oauth2' && !auth.oauth)) && !auth.secretName) {
     ctx.addIssue({ code: 'custom', path: ['secretName'], message: 'Vault secret name is required' });
   }
   if (auth.kind === 'header_secret' && (!auth.headerName || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(auth.headerName))) {
@@ -48,7 +64,7 @@ const refreshSchema = z.strictObject({
   intervalSeconds: z.number().positive().max(2_147_000).optional(),
 });
 const sourceSchema = z.strictObject({
-  id, name: id, kind: z.enum(['mcp_stdio', 'mcp_http', 'cli_wrapper', 'composite', 'skill', 'shared_folder']),
+  id, name: id, kind: z.enum(['mcp_stdio', 'mcp_http', 'cli_wrapper', 'composite', 'skill', 'skill_repo', 'shared_folder']),
   enabled: z.boolean(), config: sourceConfigSchema, authConfig: authSchema, refreshPolicy: refreshSchema,
 }).refine(source => source.kind === source.config.kind, { path: ['config', 'kind'], message: 'Source and config kind must agree' });
 
@@ -102,12 +118,21 @@ export function ensureSecretFree(value: unknown, secrets?: SecretStore) {
 
 export function validateSourceConfig(input: unknown, secrets?: SecretStore) {
   const source = parseConfig(sourceSchema, input);
+  if (source.authConfig.oauth && source.config.kind !== 'mcp_http') {
+    throw new GatewayError('INVALID_INPUT', 'Interactive OAuth is only supported for mcp_http sources');
+  }
+  if (sourceSecretNames(source).some(isManagedOAuthSecretName)) {
+    throw new GatewayError('INVALID_INPUT', 'Vault names reserved for gateway-managed OAuth credentials cannot be referenced');
+  }
   if (source.config.kind === 'mcp_http') {
     const url = new URL(source.config.url);
     if (url.username || url.password || [...url.searchParams.keys()].some(key => /token|secret|password|key|credential|signature|auth/i.test(key))
       || Object.keys(source.config.headers ?? {}).some(key => /authorization|cookie|token|secret|password|key|credential|signature/i.test(key))) {
       throw new GatewayError('INVALID_INPUT', 'Use vault references for upstream HTTP credentials');
     }
+  }
+  if (source.config.kind === 'skill_repo') {
+    parseGitHubSkillUrl(source.config.url, { ref: source.config.ref, path: source.config.path });
   }
   ensureSecretFree(source, secrets);
   return source;

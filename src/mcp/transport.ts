@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import type { ElicitResult } from '@modelcontextprotocol/client';
+import { ElicitResultSchema } from '@modelcontextprotocol/core';
 import { UnsupportedProtocolVersionError } from '@modelcontextprotocol/server';
 import { authenticateClient, challenge, type ClientIdentity } from '../auth/middleware.js';
-import { GatewayError, type SecretStore, type StorageAdapter } from '../types/index.js';
-import { capabilities, type McpGateway, serverInfo } from './gateway.js';
+import { GatewayError, type JsonSchemaObject, type SecretStore, type StorageAdapter } from '../types/index.js';
+import { validateArguments } from '../validation/schema.js';
+import { capabilities, type Elicitation, type InvocationContext, type McpGateway, serverInfo } from './gateway.js';
 
 export const supportedProtocolVersions = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'];
 const latest = supportedProtocolVersions[0];
@@ -15,7 +18,17 @@ type Send = (message: Record<string, unknown>, cursor?: string) => boolean;
 type StreamSetup = (send: Send, close: () => void) => () => void;
 type Session = {
   identity: ClientIdentity; version: string; clientName?: string; expires: number; streams: Set<() => void>;
+  elicitationForm: boolean; elicitationUrl: boolean;
 };
+type PendingElicitation = {
+  principal: string; profileId: string; requestedSchema?: JsonSchemaObject; settle: (result: ElicitResult) => void;
+};
+type Call = {
+  id: RpcId; method: string; params: Record<string, unknown>; identity: ClientIdentity; modern: boolean;
+  session?: Session; context: InvocationContext;
+};
+const elicitationTimeoutMs = 10 * 60_000;
+const declined: ElicitResult = { action: 'decline' };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -77,6 +90,27 @@ function catalogNotifications(filter: Record<string, unknown>) {
   ].filter(([key]) => filter[key] === true);
 }
 
+function elicitationSupport(capabilities: unknown) {
+  const elicitation = isObject(capabilities) ? capabilities.elicitation : undefined;
+  if (!isObject(elicitation)) return { elicitationForm: false, elicitationUrl: false };
+  const { form, url } = elicitation;
+  return { elicitationForm: Boolean(form) || (form === undefined && url === undefined), elicitationUrl: Boolean(url) };
+}
+
+function conforms(schema: JsonSchemaObject, content: unknown) {
+  try {
+    validateArguments(schema, content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRpcResponse(body: unknown): body is Record<string, unknown> {
+  return isObject(body) && body.jsonrpc === '2.0' && !Object.hasOwn(body, 'method') &&
+    (Object.hasOwn(body, 'result') || Object.hasOwn(body, 'error'));
+}
+
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 function originAllowed(originHeader: string, publicUrl: string) {
@@ -95,11 +129,12 @@ export class McpTransport {
   private readonly sessions = new Map<string, Session>();
   private readonly streams = new Set<() => void>();
   private readonly activeRequests = new Map<string, AbortController>();
+  private readonly elicitations = new Map<string, PendingElicitation>();
   private closed = false;
 
   constructor(private readonly storage: StorageAdapter, private readonly secrets: SecretStore,
     private readonly publicUrl: string, private readonly gateway: McpGateway,
-    private readonly onConnect: () => Promise<unknown>) {}
+    private readonly onConnect: (profileId: string) => Promise<unknown>) {}
 
   private sse(request: Request, headers: Headers, setup: StreamSetup, session?: Session) {
     const encoder = new TextEncoder();
@@ -165,6 +200,84 @@ export class McpTransport {
     };
   }
 
+  private answerElicitation(body: Record<string, unknown>, id: RpcId | null, identity: ClientIdentity,
+    sessionId: string | undefined, headers: Headers) {
+    if (id === null) return Response.json(errorBody(null, -32600, 'Invalid JSON-RPC response'), { status: 400, headers });
+    const key = `${sessionId ?? ''}\0${JSON.stringify(id)}`;
+    const pending = sessionId ? this.elicitations.get(key) : undefined;
+    if (!pending) return Response.json(errorBody(id, -32023, 'Unknown elicitation request'), { status: 404, headers });
+    if (pending.principal !== identity.principal || pending.profileId !== identity.profile.id) {
+      return Response.json(errorBody(id, -32024, 'Elicitation belongs to another client'), { status: 403, headers });
+    }
+    if (Object.hasOwn(body, 'error')) pending.settle({ action: 'cancel' });
+    else {
+      const parsed = ElicitResultSchema.safeParse(body.result);
+      if (!parsed.success) return Response.json(errorBody(id, -32602, 'Invalid elicitation result'), { status: 400, headers });
+      const { action, content } = parsed.data;
+      if (action === 'accept' && pending.requestedSchema && !conforms(pending.requestedSchema, content ?? {})) {
+        return Response.json(errorBody(id, -32602, 'Elicitation content does not match the requested schema'), { status: 400, headers });
+      }
+      pending.settle(action === 'accept' && content ? { action, content } : { action });
+    }
+    return new Response(null, { status: 202, headers });
+  }
+
+  private call(request: Request, headers: Headers, { id, method, params, identity, modern, session, context }: Call) {
+    const { sessionId, signal } = context;
+    const acceptsSse = (request.headers.get('accept') ?? '').toLowerCase().includes('text/event-stream');
+    const cancellers = new Set<() => void>();
+    const cancelAll = () => { for (const cancel of [...cancellers]) cancel(); };
+    let send: Send | undefined;
+    let closeStream: (() => void) | undefined;
+    let streamed = false;
+    let upgrade!: (stream: Response) => void;
+    const upgraded = new Promise<Response>(resolve => { upgrade = resolve; });
+    signal?.addEventListener('abort', cancelAll, { once: true });
+
+    const elicit: Elicitation['elicit'] = params => {
+      const supported = params.mode === 'url' ? session?.elicitationUrl : session?.elicitationForm;
+      if (!acceptsSse || !sessionId || !session || !supported || session.version === latest || signal?.aborted || this.closed) {
+        return Promise.resolve(declined);
+      }
+      if (!streamed) {
+        streamed = true;
+        upgrade(this.sse(request, headers, (streamSend, close) => {
+          send = streamSend;
+          closeStream = close;
+          return () => { send = undefined; cancelAll(); };
+        }, session));
+      }
+      if (!send) return Promise.resolve(declined);
+      const rpcId = `elicitation-${randomUUID()}`;
+      const key = `${sessionId}\0${JSON.stringify(rpcId)}`;
+      return new Promise<ElicitResult>(resolve => {
+        const settle = (result: ElicitResult) => {
+          if (!cancellers.delete(cancel)) return;
+          clearTimeout(timer);
+          this.elicitations.delete(key);
+          resolve(result);
+        };
+        const cancel = () => settle({ action: 'cancel' });
+        const timer = setTimeout(cancel, elicitationTimeoutMs);
+        timer.unref?.();
+        cancellers.add(cancel);
+        this.elicitations.set(key, { principal: identity.principal, profileId: identity.profile.id,
+          requestedSchema: params.mode === 'url' ? undefined : params.requestedSchema as JsonSchemaObject, settle });
+        if (!send?.({ jsonrpc: '2.0', id: rpcId, method: 'elicitation/create', params })) cancel();
+      });
+    };
+    const notifyElicitationComplete: Elicitation['notifyElicitationComplete'] = params => {
+      if (session?.elicitationUrl) send?.(notification('elicitation/complete', params));
+    };
+
+    const outcome = this.gateway.dispatch(method, params, identity, { ...context, elicit, notifyElicitationComplete });
+    void outcome.then(result => resultBody(id, result, modern, method), error => rpcGatewayError(id, error, this.secrets))
+      .then(body => { if (send) send(body); closeStream?.(); })
+      .finally(() => { signal?.removeEventListener('abort', cancelAll); cancelAll(); });
+    const response = Promise.race([upgraded, outcome.then(result => Response.json(resultBody(id, result, modern, method), { headers }))]);
+    return { outcome, response };
+  }
+
   private removeSession(id: string) {
     const current = this.sessions.get(id);
     this.sessions.delete(id);
@@ -212,6 +325,7 @@ export class McpTransport {
       const body: unknown = await request.json().catch(() => undefined);
       if (body === undefined) return Response.json(errorBody(null, -32700, 'Invalid JSON'), { status: 400, headers });
       if (isObject(body) && (typeof body.id === 'string' || (typeof body.id === 'number' && Number.isSafeInteger(body.id)))) id = body.id;
+      if (isRpcResponse(body)) return this.answerElicitation(body, id, identity, sessionId, headers);
       if (!isObject(body) || body.jsonrpc !== '2.0' || typeof body.method !== 'string'
         || (Object.hasOwn(body, 'id') && id === null) || (Object.hasOwn(body, 'params') && !isObject(body.params))) {
         return Response.json(errorBody(id, -32600, 'Invalid JSON-RPC request'), { status: 400, headers });
@@ -238,13 +352,14 @@ export class McpTransport {
       if (method === 'initialize') {
         for (const [key, value] of this.sessions) if (value.expires <= Date.now()) this.removeSession(key);
         const key = randomUUID();
-        this.sessions.set(key, { identity, version, clientName, expires: Date.now() + 60 * 60_000, streams: new Set() });
+        this.sessions.set(key, { identity, version, clientName, expires: Date.now() + 60 * 60_000, streams: new Set(),
+          ...elicitationSupport(params.capabilities) });
         headers.set('Mcp-Session-Id', key);
-        await this.onConnect();
+        await this.onConnect(identity.profile.id);
         return Response.json(resultBody(id, { protocolVersion: version, capabilities, serverInfo }, modern), { headers });
       }
       if (method === 'server/discover') {
-        await this.onConnect();
+        await this.onConnect(identity.profile.id);
         return Response.json(resultBody(id, { supportedVersions: [latest], capabilities }, modern, method), { headers });
       }
       if (method === 'subscriptions/listen') {
@@ -260,12 +375,14 @@ export class McpTransport {
       const reqKey = `${identity.principal}:${sessionId ?? ''}:${String(id)}`;
       this.activeRequests.set(reqKey, reqController);
       const signal = AbortSignal.any([request.signal, reqController.signal]);
-      try {
-        const result = await this.gateway.dispatch(method, params, identity, { profileId: identity.profile.id, sessionId, clientName, identity, signal });
-        return Response.json(resultBody(id, result, modern, method), { headers });
-      } finally {
+      const { outcome, response } = this.call(request, headers, {
+        id, method, params, identity, modern, session,
+        context: { profileId: identity.profile.id, sessionId, clientName, identity, signal },
+      });
+      void outcome.catch(() => {}).finally(() => {
         if (this.activeRequests.get(reqKey) === reqController) this.activeRequests.delete(reqKey);
-      }
+      });
+      return await response;
     } catch (error) {
       if (error instanceof UnsupportedProtocolVersionError) {
         return Response.json(errorBody(id, error.code, 'UnsupportedProtocolVersionError', error.data), { status: 400, headers });
@@ -279,6 +396,7 @@ export class McpTransport {
     for (const controller of this.activeRequests.values()) controller.abort();
     this.activeRequests.clear();
     for (const close of this.streams) close();
+    for (const pending of [...this.elicitations.values()]) pending.settle({ action: 'cancel' });
     this.sessions.clear();
   }
 }

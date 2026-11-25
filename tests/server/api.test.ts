@@ -175,21 +175,98 @@ describe('sources', () => {
   });
 });
 
+describe('upstream OAuth source API', () => {
+  it('guards status, start, and disconnect and exposes connection state without credentials', async () => {
+    const h = makeHarness({ mode: 'remote' });
+    const created = await h.json('/api/recipes/mcp-http-oauth/instantiate', {
+      method: 'POST',
+      json: { values: { name: 'OAuth MCP', url: 'https://example.com/mcp', scopes: ['read'],
+        clientId: 'client', authorizationEndpoint: 'https://example.com/authorize',
+        tokenEndpoint: 'https://example.com/token', extraAuthParams: ['prompt=consent'] } },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.source.refreshPolicy).toEqual({ mode: 'manual' });
+    const id = created.body.source.id;
+    const path = `/api/sources/${id}/oauth`;
+    for (const [endpoint, method] of [[path, 'GET'], [path + '/start', 'POST'], [path, 'DELETE']]) {
+      expect((await h.call(endpoint, { method, auth: false })).status).toBe(401);
+    }
+    expect((await h.json(path)).body.oauth).toMatchObject({
+      configured: true, connected: false, hasRefreshToken: false, clientId: 'client',
+    });
+    const started = await h.json(path + '/start', { method: 'POST' });
+    expect(started.status).toBe(200);
+    const authorizeUrl = new URL(started.body.authorizeUrl);
+    expect(authorizeUrl.searchParams.get('prompt')).toBe('consent');
+    expect(authorizeUrl.searchParams.get('redirect_uri')).toBe(started.body.redirectUri);
+    const params = new URLSearchParams({ state: authorizeUrl.searchParams.get('state')!, code: 'fixture-code' });
+    expect((await h.call('/auth/oauth/callback?' + params, { auth: false })).status).toBe(200);
+    expect((await h.json(path)).body.oauth).toMatchObject({ connected: true });
+    expect((await h.json(path, { method: 'DELETE' })).body).toEqual({ ok: true });
+    expect((await h.json(path)).body.oauth).toMatchObject({ connected: false });
+    expect((await h.json('/api/sources/missing/oauth')).status).toBe(404);
+  });
+
+  it('rejects malformed OAuth source and recipe input', async () => {
+    const h = makeHarness();
+    const config = { kind: 'mcp_http', url: 'https://example.com/mcp' };
+    for (const authConfig of [
+      { kind: 'none', oauth: {} }, { kind: 'oauth2' },
+      { kind: 'oauth2', oauth: { clientSecret: 'raw' } },
+      { kind: 'oauth2', oauth: { extraAuthParams: { STATE: 'override' } } },
+      { kind: 'oauth2', oauth: { authorizationEndpoint: 'https://user:pass@example.com/authorize' } },
+    ]) {
+      expect((await h.json('/api/sources', { method: 'POST',
+        json: { name: 'OAuth MCP', kind: 'mcp_http', config, authConfig } })).status).toBe(400);
+    }
+    expect((await h.json('/api/recipes/mcp-http-oauth/instantiate', { method: 'POST',
+      json: { values: { name: 'OAuth MCP', url: config.url, extraAuthParams: ['no-equals'] } } })).status).toBe(400);
+  });
+});
+
 describe('recipes', () => {
-  it('lists the six generic starter recipes without build functions', async () => {
+  it('lists the eight generic starter recipes without build functions', async () => {
     const h = makeHarness();
     const { body } = await h.json('/api/recipes');
     expect(body.recipes.map((r: { id: string }) => r.id).sort()).toEqual(
       [
         'agent-skill',
         'cli-wrapper-readonly',
+        'github-skill-repo',
         'mcp-http-remote',
+        'mcp-http-oauth',
         'mcp-stdio-generic',
         'openconnector-http',
         'shared-workspace-folder',
       ].sort(),
     );
     expect(JSON.stringify(body)).not.toContain('build');
+  });
+
+  it('instantiates github-skill-repo recipe and fetches skill preview content', async () => {
+    const h = makeHarness();
+    const res = await h.json('/api/recipes/github-skill-repo/instantiate', {
+      method: 'POST',
+      json: {
+        values: { url: 'https://github.com/kunchenguid/vision/tree/main/skills/vision' },
+      },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.source.name).toBe('vision');
+    expect(res.body.source.config).toEqual({
+      kind: 'skill_repo',
+      url: 'https://github.com/kunchenguid/vision',
+      ref: 'main',
+      path: 'skills/vision',
+    });
+
+    const caps = await h.json(`/api/capabilities?sourceId=${res.body.source.id}&kind=skill`);
+    expect(caps.body.capabilities).toHaveLength(1);
+    const capId = encodeURIComponent(caps.body.capabilities[0].id as string);
+    const preview = await h.json(`/api/capabilities/${capId}/content`);
+    expect(preview.status).toBe(200);
+    expect(preview.body.uri).toBe('skill://vision');
+    expect(preview.body.content).toContain('kunchenguid/vision');
   });
 
   it('instantiates a recipe into a source', async () => {
@@ -527,6 +604,12 @@ describe('events', () => {
     expect(after.body.occurrences).toHaveLength(1);
     const named = await h.json('/api/events/occurrences?name=other.event');
     expect(named.body.occurrences).toHaveLength(1);
+    const newest = await h.json('/api/events/occurrences?order=desc&limit=1');
+    expect(newest.status).toBe(200);
+    expect(newest.body.occurrences.map((event: { name: string }) => event.name)).toEqual(['other.event']);
+    const oldest = await h.json('/api/events/occurrences?order=asc');
+    expect(oldest.body.occurrences.map((event: { name: string }) => event.name)).toEqual(['fabric.source.health_changed', 'other.event']);
+    expect((await h.json('/api/events/occurrences?order=sideways')).status).toBe(400);
     expect((await h.json('/api/events/occurrences?limit=0')).status).toBe(400);
     expect((await h.json('/api/events/occurrences?limit=abc')).status).toBe(400);
     expect((await h.json('/api/events/emit', { method: 'POST', json: { name: 'x', data: 'str' } })).status).toBe(400);

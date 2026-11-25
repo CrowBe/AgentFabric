@@ -3,11 +3,14 @@ import { z } from 'zod';
 import { GatewayError, type CapabilityProposalRecord, type CreateSourceInput, type SecretStore, type SourceRecord, type StorageAdapter } from '../types/index.js';
 import { ensureSecretFree, parseConfig, sourceConfigSchema } from '../storage/portability.js';
 import { validateComposite } from '../upstreams/composite.js';
+import { parseGitHubSkillUrl } from '../upstreams/github-skills.js';
+
+const proposalKinds = ['cli_wrapper', 'composite', 'skill', 'skill_repo'] as const;
 
 const proposalSchema = z.strictObject({
   name: z.string().min(1), description: z.string(),
-  definition: sourceConfigSchema.refine(config => config.kind === 'composite' || config.kind === 'cli_wrapper'),
-  kind: z.enum(['cli_wrapper', 'composite']).optional(),
+  definition: sourceConfigSchema.refine(config => (proposalKinds as readonly string[]).includes(config.kind)),
+  kind: z.enum(proposalKinds).optional(),
 });
 
 export class Proposals {
@@ -20,12 +23,14 @@ export class Proposals {
       throw new GatewayError('CONFLICT', 'Too many pending capability proposals; review existing proposals first');
     }
     const { name, description, definition, kind } = parseConfig(proposalSchema, input);
-    if ((definition.kind !== 'composite' && definition.kind !== 'cli_wrapper') || (kind && kind !== definition.kind)) {
+    if (!(proposalKinds as readonly string[]).includes(definition.kind) || (kind && kind !== definition.kind)) {
       throw new GatewayError('INVALID_INPUT', 'Invalid proposal kind');
     }
+    const proposalKind = definition.kind as CapabilityProposalRecord['kind'];
     if (definition.kind === 'composite') validateComposite(definition);
+    if (definition.kind === 'skill_repo') parseGitHubSkillUrl(definition.url, { ref: definition.ref, path: definition.path });
     ensureSecretFree({ name, description, definition }, this.secrets);
-    const proposal: CapabilityProposalRecord = { id: randomUUID(), kind: definition.kind, name, description, definition,
+    const proposal: CapabilityProposalRecord = { id: randomUUID(), kind: proposalKind, name, description, definition: definition as CapabilityProposalRecord['definition'],
       profileId, proposedBySessionId, status: 'pending_review', createdAt: new Date().toISOString() };
     await this.storage.upsertProposal(proposal);
     await this.emit(proposal).catch(() => {});

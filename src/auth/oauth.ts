@@ -142,10 +142,14 @@ export function createOAuth(storage: StorageAdapter, publicUrl: string) {
       if (grant === 'authorization_code') {
         const verifier = params.get('code_verifier') ?? '';
         if (!proofPattern.test(verifier)) return invalid();
+        const proof = hashToken(createHash('sha256').update(verifier).digest('base64url'));
+        const redeemable = (code: OAuthAuthorizationCodeRecord | null): code is OAuthAuthorizationCodeRecord =>
+          code !== null && code.clientId === client.clientId && params.get('redirect_uri') === code.redirectUri
+          && Date.parse(code.expiresAt) > Date.now() && timingSafeEqual(Buffer.from(proof), Buffer.from(hashToken(code.codeChallenge)));
+        const stored = await storage.getOAuthCode(hash);
+        if (!redeemable(stored)) return invalid();
         const code = await storage.consumeOAuthCode(hash);
-        if (!code || params.get('redirect_uri') !== code.redirectUri) return invalid();
-        const actual = createHash('sha256').update(verifier).digest('base64url');
-        if (!timingSafeEqual(Buffer.from(hashToken(actual)), Buffer.from(hashToken(code.codeChallenge)))) return invalid();
+        if (!redeemable(code) || code.profileId !== stored.profileId || code.scope !== stored.scope) return invalid();
         credential = code;
       } else {
         const refresh = await storage.getOAuthRefreshTokenByHash(hash);

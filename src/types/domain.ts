@@ -6,6 +6,7 @@ export type SourceKind =
   | 'cli_wrapper'
   | 'composite'
   | 'skill'
+  | 'skill_repo'
   | 'shared_folder';
 
 export interface RefreshPolicy {
@@ -21,8 +22,71 @@ export type SourceHealthStatus =
   | 'disabled'
   | 'initializing';
 
+export type OAuthTokenEndpointAuthMethod = 'none' | 'client_secret_post' | 'client_secret_basic';
+
+export interface UpstreamOAuthConfig {
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+  registrationEndpoint?: string;
+  clientId?: string;
+  clientSecretName?: string;
+  scopes?: string[];
+  extraAuthParams?: Record<string, string>;
+  tokenEndpointAuthMethod?: OAuthTokenEndpointAuthMethod;
+  resource?: string;
+}
+
+export interface UpstreamOAuthStateRecord {
+  stateHash: string;
+  sourceId: string;
+  codeVerifier: string;
+  redirectUri: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  issuer?: string;
+  clientId: string;
+  clientSecretName?: string;
+  dcrClientSecretName?: string;
+  tokenEndpointAuthMethod: OAuthTokenEndpointAuthMethod;
+  scope?: string;
+  resource?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface UpstreamOAuthTokenRecord {
+  sourceId: string;
+  accessSecretName: string;
+  refreshSecretName?: string;
+  clientId: string;
+  clientSecretName?: string;
+  dcrClientSecretName?: string;
+  authorizationEndpoint?: string;
+  tokenEndpoint: string;
+  issuer?: string;
+  tokenEndpointAuthMethod: OAuthTokenEndpointAuthMethod;
+  tokenType: string;
+  scope?: string;
+  resource?: string;
+  expiresAt?: string;
+  updatedAt: string;
+}
+
+export interface UpstreamOAuthStatus {
+  configured: boolean;
+  connected: boolean;
+  redirectUri: string;
+  hasRefreshToken: boolean;
+  expiresAt?: string;
+  scope?: string;
+  clientId?: string;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+}
+
 export interface SourceAuthConfig {
   kind: 'none' | 'bearer_secret' | 'header_secret' | 'env_secrets' | 'oauth2';
+  oauth?: UpstreamOAuthConfig;
   secretName?: string;
   headerName?: string;
   envMap?: Record<string, string>;
@@ -49,12 +113,19 @@ export interface McpHttpSourceConfig {
   timeoutMs?: number;
 }
 
+export interface CliOptionalArgSpec {
+  key: string;
+  flag: string;
+  mode?: 'value' | 'flag' | 'repeat';
+}
+
 export interface CliWrapperSourceConfig {
   kind: 'cli_wrapper';
   toolName: string;
   description: string;
   command: string;
   argsTemplate: string[];
+  optionalArgs?: CliOptionalArgSpec[];
   inputSchema: JsonSchemaObject;
   cwd?: string;
   envAllowlist?: string[];
@@ -89,6 +160,15 @@ export interface SkillSourceConfig {
   tags?: string[];
 }
 
+export interface SkillRepoSourceConfig {
+  kind: 'skill_repo';
+  url: string;
+  ref?: string;
+  path?: string;
+  includeSkills?: string[];
+  tags?: string[];
+}
+
 export interface SharedFolderSourceConfig {
   kind: 'shared_folder';
   shareName: string;
@@ -105,6 +185,7 @@ export type SourceConfig =
   | CliWrapperSourceConfig
   | CompositeSourceConfig
   | SkillSourceConfig
+  | SkillRepoSourceConfig
   | SharedFolderSourceConfig;
 
 export interface SourceRecord {
@@ -294,12 +375,16 @@ export type ProposalStatus = 'pending_review' | 'activated' | 'rejected';
 
 export interface CapabilityProposalRecord {
   id: string;
-  kind: 'cli_wrapper' | 'composite';
+  kind: 'cli_wrapper' | 'composite' | 'skill' | 'skill_repo';
   name: string;
   description: string;
   profileId?: string;
   proposedBySessionId?: string;
-  definition: CliWrapperSourceConfig | CompositeSourceConfig;
+  definition:
+    | CliWrapperSourceConfig
+    | CompositeSourceConfig
+    | SkillSourceConfig
+    | SkillRepoSourceConfig;
   status: ProposalStatus;
   reviewNote?: string;
   activatedSourceId?: string;
@@ -416,6 +501,7 @@ export interface OAuthRefreshTokenRecord {
 export interface AuthTicketRecord {
   ticketHash: string;
   sourceId: string;
+  sourceUpdatedAt?: string;
   reason: string;
   expiresAt: string;
   createdAt: string;

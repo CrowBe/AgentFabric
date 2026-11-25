@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto';
-import { Client, type Transport } from '@modelcontextprotocol/client';
+import { Client, type ElicitResult, type Transport } from '@modelcontextprotocol/client';
+import { ElicitRequestParamsSchema, ElicitResultSchema } from '@modelcontextprotocol/core';
 import { z } from 'zod';
+import type { UpstreamOAuthManager } from '../auth/upstream-oauth.js';
+import type { Elicitation } from '../mcp/gateway.js';
 import type * as T from '../types/index.js';
 import { GatewayError } from '../types/index.js';
 import { checkSecrets, executeCliWrapper, requireLocalCli } from './cli-wrapper.js';
 import { executeComposite, validateComposite } from './composite.js';
+import { fetchGitHubSkills } from './github-skills.js';
 import { httpTransport } from './mcp-http.js';
 import { stdioTransport } from './mcp-stdio.js';
 import { checkShare, filePathSchema, listShare, readShare, sharePath, shareUri } from './shared-folders.js';
-import { skillCapabilities } from './skills.js';
+import { repoSkillCapabilities, skillCapabilities, skillMimeType } from './skills.js';
 
 type Entry = Pick<T.CapabilityRecord, 'kind' | 'originalName' | 'description'> & Partial<T.CapabilityRecord>;
 type Emit = (input: { name: string; sourceId?: string; data: Record<string, unknown> }) => Promise<unknown>;
@@ -38,6 +42,36 @@ const streamNotifications = {
   terminated: z.object({ error: z.object({ code: z.int() }) }),
 };
 
+type CallContext = Elicitation & { signal?: AbortSignal };
+const decline: ElicitResult = { action: 'decline' };
+
+function safeElicitationUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && !parsed.username && !parsed.password;
+  } catch { return false; }
+}
+
+function pausableDeadline(ms: number) {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let paused = 0;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), ms);
+    timer.unref();
+  };
+  arm();
+  return {
+    signal: controller.signal,
+    async during<R>(work: () => Promise<R>) {
+      if (paused++ === 0) clearTimeout(timer);
+      try { return await work(); } finally { if (--paused === 0 && !controller.signal.aborted) arm(); }
+    },
+    clear: () => clearTimeout(timer),
+  };
+}
+
 function catalogFingerprint(caps: T.CapabilityRecord[], events: T.McpEventTypeRecord[]) {
   return JSON.stringify([
     [...caps].sort((a, b) => a.id.localeCompare(b.id)).map(({ lastSeenAt: _seen, ...cap }) => cap),
@@ -48,6 +82,8 @@ function catalogFingerprint(caps: T.CapabilityRecord[], events: T.McpEventTypeRe
 export class UpstreamManager {
   private readonly clients = new Map<string, Promise<Client>>();
   private readonly work = new Map<string, Promise<unknown>>();
+  private readonly calls = new Map<string, Promise<void>>();
+  private readonly elicitations = new WeakMap<Client, Elicitation>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private closed = false;
   private reconfiguring = false;
@@ -56,6 +92,7 @@ export class UpstreamManager {
     private readonly storage: T.StorageAdapter, private readonly secrets: T.SecretStore,
     private readonly mode: T.GatewayMode, private readonly homeDir: string, private readonly emit: Emit,
     private readonly handoff: (source: T.SourceRecord, reason: string) => Promise<T.AuthHandoffInfo>,
+    private readonly upstreamOAuth?: UpstreamOAuthManager,
   ) {}
 
   async source(id: string) {
@@ -70,13 +107,18 @@ export class UpstreamManager {
 
   private async newClient(source: T.SourceRecord) {
     const client = new Client({ name: 'AgentFabric', version: '0.1.0' }, {
-      versionNegotiation: { mode: 'auto' }, capabilities: { extensions: { 'io.modelcontextprotocol/events': {} } },
+      versionNegotiation: { mode: 'auto' },
+      capabilities: { elicitation: { form: {}, url: {} }, extensions: { 'io.modelcontextprotocol/events': {} } },
+    });
+    client.setRequestHandler('elicitation/create', request => this.elicit(client, request.params));
+    client.setNotificationHandler('notifications/elicitation/complete', notification => {
+      this.elicitations.get(client)?.notifyElicitationComplete?.(this.secrets.redactValue(notification.params));
     });
     let transport: Transport | undefined;
     try {
       await checkSecrets(source, this.secrets);
       if (source.config.kind === 'mcp_stdio') transport = await stdioTransport({ ...source, config: source.config }, this.secrets);
-      else if (source.config.kind === 'mcp_http') transport = await httpTransport({ ...source, config: source.config }, this.secrets);
+      else if (source.config.kind === 'mcp_http') transport = await httpTransport({ ...source, config: source.config }, this.secrets, this.upstreamOAuth);
       else throw new GatewayError('UPSTREAM_ERROR', 'Source is not an MCP adapter');
       const timeout = this.timeout(source);
       await client.connect(transport, { timeout, signal: AbortSignal.timeout(timeout) });
@@ -135,7 +177,11 @@ export class UpstreamManager {
     if (error instanceof GatewayError && !['UPSTREAM_ERROR', 'UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE'].includes(error.code)) return error;
     const timedOut = err?.code === 'UPSTREAM_TIMEOUT' || err?.code === -32001 || err?.name === 'TimeoutError'
       || /timed?\s*out|timeout|deadline/i.test(err?.message ?? '');
-    const message = timedOut ? 'Upstream operation timed out' : 'Upstream operation failed';
+    const message = timedOut
+      ? 'Upstream operation timed out'
+      : source.kind === 'skill_repo' && error instanceof GatewayError && error.code === 'UPSTREAM_ERROR'
+        ? this.secrets.redact(error.message)
+        : 'Upstream operation failed';
     await this.markHealth(source, 'degraded', message).catch(() => {});
     await this.disconnect(source.id);
     return new GatewayError(timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_ERROR', message);
@@ -203,6 +249,18 @@ export class UpstreamManager {
       }
     } else if (config.kind === 'skill') {
       capabilities.push(...skillCapabilities(config));
+    } else if (config.kind === 'skill_repo') {
+      const bearerToken = source.authConfig.kind === 'bearer_secret' && source.authConfig.secretName
+        ? await this.secrets.get(source.authConfig.secretName)
+        : undefined;
+      const skills = await fetchGitHubSkills(config, { ...(bearerToken ? { bearerToken } : {}) });
+      for (const skill of skills) {
+        capabilities.push(...repoSkillCapabilities(skill, {
+          url: config.url,
+          ...(config.ref ? { ref: config.ref } : {}),
+          ...(config.path ? { path: config.path } : {}),
+        }));
+      }
     } else if (config.kind === 'shared_folder') {
       await checkShare(config);
       capabilities.push(
@@ -218,6 +276,40 @@ export class UpstreamManager {
       capabilities.push({ kind: 'tool', originalName: config.toolName, description: config.description, inputSchema: config.inputSchema });
     }
     return { capabilities, eventTypes };
+  }
+
+  private async exclusive<R>(id: string, signal: AbortSignal | undefined, fn: () => Promise<R>) {
+    const previous = this.calls.get(id) ?? Promise.resolve();
+    let release!: () => void;
+    const turn = new Promise<void>(resolve => { release = resolve; });
+    const tail = previous.then(() => turn);
+    this.calls.set(id, tail);
+    try {
+      if (signal) {
+        let onAbort: (() => void) | undefined;
+        await Promise.race([previous, new Promise<never>((_, reject) => {
+          onAbort = () => reject(new GatewayError('UPSTREAM_UNAVAILABLE', 'Caller cancelled before execution'));
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
+        })]).finally(() => signal.removeEventListener('abort', onAbort!));
+      } else await previous;
+      return await fn();
+    } finally {
+      release();
+      void tail.then(() => { if (this.calls.get(id) === tail) this.calls.delete(id); });
+    }
+  }
+
+  private async elicit(client: Client, raw: unknown): Promise<ElicitResult> {
+    const caller = this.elicitations.get(client);
+    const parsed = ElicitRequestParamsSchema.safeParse(raw);
+    if (!caller?.elicit || !parsed.success) return decline;
+    const { _meta: _upstreamMeta, task: _task, ...params } = this.secrets.redactValue(parsed.data);
+    if (params.mode === 'url' && !safeElicitationUrl(params.url)) return decline;
+    const answer = ElicitResultSchema.safeParse(await caller.elicit(params).catch(() => undefined));
+    if (!answer.success) return { action: 'cancel' };
+    const { action, content } = answer.data;
+    return action === 'accept' && content ? { action, content } : { action };
   }
 
   private serial<T>(id: string, fn: () => Promise<T>) {
@@ -300,8 +392,11 @@ export class UpstreamManager {
 
   mutate(id: string, operation: () => Promise<void>) {
     return this.serial(id, async () => {
-      await this.disconnect(id);
-      await operation();
+      try {
+        await operation();
+      } finally {
+        await this.disconnect(id);
+      }
     });
   }
 
@@ -312,15 +407,32 @@ export class UpstreamManager {
 
   async invoke(
     source: T.SourceRecord, cap: T.CapabilityRecord, args: Record<string, unknown>,
-    call: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+    call: (name: string, args: Record<string, unknown>) => Promise<unknown>, context: CallContext = {},
+    beforeExecute?: () => Promise<void>,
   ): Promise<unknown> {
     if (this.closed || this.reconfiguring || !source.enabled) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source is unavailable');
+    await this.assertUnchanged(source);
+    if (source.config.kind === 'cli_wrapper' || source.config.kind === 'mcp_stdio') requireLocalCli(this.mode);
+    if (source.config.kind !== 'mcp_http' && source.config.kind !== 'mcp_stdio') return this.execute(source, cap, args, call, context);
+    return this.exclusive(source.id, context.signal, async () => {
+      await this.assertUnchanged(source);
+      await beforeExecute?.();
+      return this.execute(source, cap, args, call, context);
+    });
+  }
+
+  private async assertUnchanged(source: T.SourceRecord) {
     const current = await this.source(source.id);
     if (!current.enabled || current.updatedAt !== source.updatedAt || this.reconfiguring || this.closed) {
       throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source configuration changed before execution');
     }
+  }
+
+  private async execute(
+    source: T.SourceRecord, cap: T.CapabilityRecord, args: Record<string, unknown>,
+    call: (name: string, args: Record<string, unknown>) => Promise<unknown>, context: CallContext,
+  ): Promise<unknown> {
     const config = source.config;
-    if (config.kind === 'cli_wrapper' || config.kind === 'mcp_stdio') requireLocalCli(this.mode);
     try {
       await checkSecrets(source, this.secrets);
       if (config.kind === 'cli_wrapper') return await executeCliWrapper({ ...source, config }, args, this.mode, this.secrets);
@@ -329,6 +441,24 @@ export class UpstreamManager {
         return cap.kind === 'prompt'
           ? { description: config.description, messages: [{ role: 'user', content: { type: 'text', text: config.content } }] }
           : { contents: [{ uri: cap.uri, mimeType: 'text/markdown', text: config.content }] };
+      }
+      if (config.kind === 'skill_repo') {
+        const content = typeof cap.metadata?.skillContent === 'string' ? cap.metadata.skillContent : '';
+        if (cap.kind === 'prompt') {
+          return { description: cap.description, messages: [{ role: 'user', content: { type: 'text', text: content } }] };
+        }
+        const requestedUri = String(args.uri ?? cap.uri);
+        if (requestedUri === cap.uri || requestedUri === `${cap.uri}/SKILL.md`) {
+          return { contents: [{ uri: requestedUri, mimeType: 'text/markdown', text: content }] };
+        }
+        const files = (cap.metadata?.skillFiles ?? {}) as Record<string, string>;
+        if (cap.uri && requestedUri.startsWith(`${cap.uri}/`)) {
+          const relPath = requestedUri.slice(cap.uri.length + 1);
+          if (Object.hasOwn(files, relPath)) {
+            return { contents: [{ uri: requestedUri, mimeType: skillMimeType(relPath), text: files[relPath] }] };
+          }
+        }
+        throw new GatewayError('CAPABILITY_NOT_FOUND', 'Skill file does not exist');
       }
       if (config.kind === 'shared_folder') {
         if (cap.kind === 'tool') return cap.originalName === config.shareName + '_list'
@@ -339,15 +469,32 @@ export class UpstreamManager {
         const contents = path ? await readShare(config, path, this.homeDir) : { mimeType: 'application/json', text: JSON.stringify(await listShare(config, '', this.homeDir)) };
         return { contents: [{ uri, ...contents }] };
       }
-      const client = await this.client(source);
-      const options = { timeout: this.timeout(source) };
-      if (cap.kind === 'tool') return await client.callTool({ name: cap.originalName, arguments: args }, options);
-      if (cap.kind === 'prompt') return await client.getPrompt({ name: cap.originalName, arguments: args as Record<string, string> }, options);
-      return await client.readResource({ uri: String(args.uri ?? cap.uri) }, { ...options, cacheMode: 'bypass' });
+      return await this.callMcp(source, cap, args, context);
     } catch (error) {
       if (config.kind === 'composite' && error instanceof GatewayError && error.code !== 'AUTH_REQUIRED') throw error;
       if (config.kind === 'composite' && error instanceof GatewayError && error.authHandoff) throw error;
       throw await this.upstreamError(source, error);
+    }
+  }
+
+  private async callMcp(source: T.SourceRecord, cap: T.CapabilityRecord, args: Record<string, unknown>, context: CallContext) {
+    const client = await this.client(source);
+    const deadline = pausableDeadline(this.timeout(source));
+    const { elicit, notifyElicitationComplete } = context;
+    this.elicitations.set(client, {
+      elicit: elicit && (params => deadline.during(() => elicit(params))),
+      notifyElicitationComplete,
+    });
+    const options = { timeout: 2_147_483_647, signal: deadline.signal };
+    try {
+      if (cap.kind === 'tool') return await client.callTool({ name: cap.originalName, arguments: args }, options);
+      if (cap.kind === 'prompt') return await client.getPrompt({ name: cap.originalName, arguments: args as Record<string, string> }, options);
+      return await client.readResource({ uri: String(args.uri ?? cap.uri) }, { ...options, cacheMode: 'bypass' });
+    } catch (error) {
+      throw deadline.signal.aborted ? new GatewayError('UPSTREAM_TIMEOUT', 'Upstream operation timed out') : error;
+    } finally {
+      deadline.clear();
+      this.elicitations.delete(client);
     }
   }
 
@@ -356,8 +503,8 @@ export class UpstreamManager {
     if (!source.enabled) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source is disabled');
     try {
       await checkSecrets(source, this.secrets);
-      const client = await this.client(source);
-      return await client.request({ method: 'events/poll', params }, eventPollSchema, { timeout: this.timeout(source) });
+      return await this.exclusive(source.id, undefined, async () => (await this.client(source))
+        .request({ method: 'events/poll', params }, eventPollSchema, { timeout: this.timeout(source) }));
     } catch (error) { throw await this.upstreamError(source, error); }
   }
 

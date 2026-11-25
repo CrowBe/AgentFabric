@@ -45,7 +45,7 @@ const VIEWS: View[] = [
 ];
 
 const routeFromHash = (): string => {
-  const id = window.location.hash.replace(/^#\/?/, '');
+  const id = window.location.hash.replace(/^#\/?/, '').split('?')[0];
   return VIEWS.some((v) => v.id === id) ? id : 'overview';
 };
 

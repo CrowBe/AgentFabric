@@ -1,10 +1,13 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { createGatewayRuntime } from '../../src/runtime/index.js';
+import { MemoryStorageAdapter, MemoryTraceStore } from '../../src/storage/memory.js';
+import { InMemorySecretStore } from '../../src/storage/secrets.js';
 import { DuckDbTraceStore } from '../../src/storage/trace-db.js';
-import type { EffectiveCapability, NormalizationOverlay, PortableConfigBundle, ProfileRecord, SafetyPolicyRule } from '../../src/types/index.js';
+import type { EffectiveCapability, GatewayRuntime, NormalizationOverlay, PortableConfigBundle, ProfileRecord,
+  SafetyPolicyRule } from '../../src/types/index.js';
 import { listen } from './fixtures/http.js';
 import { addSource, api, clientToken, httpMcp, httpSource, mcpClient, startGateway, track } from './harness.js';
 
@@ -145,4 +148,61 @@ it('imports local cli_wrapper and mcp_stdio sources disabled by default without 
     source: { id: source.id, enabled: false, health: 'disabled' },
   });
   expect(await cli.calls()).toEqual([]);
+});
+
+async function profileCredentials(runtime: GatewayRuntime, profileId: string) {
+  const publicUrl = runtime.publicUrl;
+  const redirect = 'https://client.example/cb';
+  const registered = await runtime.handleOAuthRegister(new Request(publicUrl + '/oauth/register', {
+    method: 'POST', body: JSON.stringify({ client_name: 'revival', redirect_uris: [redirect] }),
+  }));
+  const { client_id } = await registered.json() as { client_id: string };
+  const verifier = randomBytes(32).toString('base64url');
+  const { redirectUrl } = await runtime.approveOAuthAuthorize({ clientId: client_id, redirectUri: redirect, profileId, scope: 'mcp',
+    codeChallenge: createHash('sha256').update(verifier).digest('base64url') });
+  const exchange = (values: Record<string, string>) => runtime.handleOAuthToken(new Request(publicUrl + '/oauth/token', {
+    method: 'POST', body: new URLSearchParams({ client_id, ...values }),
+  }));
+  const granted = await exchange({ grant_type: 'authorization_code', code: new URL(redirectUrl).searchParams.get('code')!,
+    code_verifier: verifier, redirect_uri: redirect });
+  expect(granted.status).toBe(200);
+  const { access_token, refresh_token } = await granted.json() as { access_token: string; refresh_token: string };
+  const { token: bearer } = await runtime.createToken({ profileId, label: 'revival' });
+  const ping = (token: string) => runtime.handleMcpRequest(new Request(publicUrl + '/mcp/' + profileId, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  }), profileId);
+  return {
+    async statuses() {
+      const refreshed = await exchange({ grant_type: 'refresh_token', refresh_token });
+      return { bearer: (await ping(bearer)).status, access: (await ping(access_token)).status, refresh: refreshed.status };
+    },
+  };
+}
+
+it('never revives bearer or refresh tokens when a deleted or replace-imported profile is recreated', async () => {
+  const runtime = await createGatewayRuntime({ mode: 'local', homeDir: '/unused', publicUrl: 'https://fabric.example',
+    storage: new MemoryStorageAdapter(), traceStore: new MemoryTraceStore(), secrets: new InMemorySecretStore() });
+  try {
+    const recreate = (id: string) => runtime.createProfile({ id, name: id });
+    await recreate('deleted');
+    await recreate('replaced');
+    await recreate('kept');
+    const deleted = await profileCredentials(runtime, 'deleted');
+    const replaced = await profileCredentials(runtime, 'replaced');
+    const kept = await profileCredentials(runtime, 'kept');
+
+    await runtime.deleteProfile('deleted');
+    await recreate('deleted');
+    expect(await deleted.statuses()).toEqual({ bearer: 401, access: 401, refresh: 400 });
+
+    const bundle = await runtime.exportConfig();
+    await runtime.importConfig({ ...bundle, profiles: bundle.profiles.filter(item => item.id !== 'replaced') }, { merge: false });
+    expect(await runtime.getProfile('replaced')).toBeNull();
+    await recreate('replaced');
+    expect(await replaced.statuses()).toEqual({ bearer: 401, access: 401, refresh: 400 });
+
+    const survivor = await kept.statuses();
+    expect(survivor).toMatchObject({ bearer: 200, access: 200, refresh: 200 });
+  } finally { await runtime.close(); }
 });

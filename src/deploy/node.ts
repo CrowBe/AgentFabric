@@ -22,7 +22,6 @@ const OPERATOR_TOKEN_FILE = 'operator-token';
 export interface NodeServerOptions {
   port?: number;
   host?: string;
-  /** Defaults to `$AGENTFABRIC_HOME` or `~/.agentfabric` (always outside the repository). */
   homeDir?: string;
   publicUrl?: string;
   mode?: GatewayMode;
@@ -31,7 +30,6 @@ export interface NodeServerOptions {
   llm?: LlmAssistConfig;
   env?: NodeJS.ProcessEnv;
   log?: (line: string) => void;
-  /** Test seam; defaults to the real runtime. */
   createRuntime?: (options: RuntimeOptions) => Promise<GatewayRuntime>;
 }
 
@@ -49,10 +47,6 @@ export function resolveHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.AGENTFABRIC_HOME || path.join(os.homedir(), '.agentfabric');
 }
 
-/**
- * Operator token precedence: explicit option, `AGENTFABRIC_OPERATOR_TOKEN`, the token file in
- * the home directory, otherwise a fresh random token persisted there with owner-only access.
- */
 export async function loadOperatorToken(
   homeDir: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -65,7 +59,6 @@ export async function loadOperatorToken(
     const existing = (await readFile(file, 'utf8')).trim();
     if (existing) return existing;
   } catch {
-    // First run: create below.
   }
   const token = `afop_${randomBytes(32).toString('base64url')}`;
   await mkdir(homeDir, { recursive: true, mode: 0o700 });
@@ -111,7 +104,6 @@ export async function startNodeServer(
   const operatorToken = await loadOperatorToken(homeDir, env, options.operatorToken);
   const llm = options.llm ?? llmFromEnv(env);
 
-  // The public URL needs the bound port, so port 0 resolves it after listening.
   const publicUrlFromEnv = options.publicUrl ?? env.AGENTFABRIC_PUBLIC_URL;
   const buildRuntime = options.createRuntime ?? createGatewayRuntime;
 
@@ -185,7 +177,6 @@ export function formatBanner(server: RunningNodeServer): string {
   ].join('\n');
 }
 
-/** Start the gateway, print the banner, and resolve once SIGINT/SIGTERM has shut it down. */
 export async function runNodeServer(options: NodeServerOptions = {}): Promise<void> {
   const log = options.log ?? ((line: string) => console.log(line));
   const server = await startNodeServer(options);

@@ -5,7 +5,6 @@ import { sourceEnvironment } from './cli-wrapper.js';
 export async function stdioTransport(source: SourceRecord & { config: McpStdioSourceConfig }, secrets: SecretStore) {
   const { command, args, cwd, envAllowlist } = source.config;
   const env = await sourceEnvironment(source, envAllowlist, secrets);
-  // The SDK overlays env onto its defaults. spawn omits keys explicitly set to undefined.
   const inherited = Object.fromEntries(DEFAULT_INHERITED_ENV_VARS.map(key => [key, undefined]));
   return new StdioClientTransport({ command, args, cwd, env: { ...inherited, ...env } as Record<string, string>, stderr: 'ignore' });
 }

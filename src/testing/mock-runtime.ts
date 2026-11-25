@@ -1,5 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { MAX_SECRET_LENGTH } from '../auth/handoff.js';
+import { hashToken } from '../auth/middleware.js';
+import { InMemorySecretStore } from '../storage/secrets.js';
+import { deriveRepoSourceName, parseGitHubSkillUrl } from '../upstreams/github-skills.js';
 import {
   GatewayError,
   type ApprovalEvent,
@@ -14,6 +18,7 @@ import {
   type CreateSourceInput,
   type CurationHint,
   type EffectiveCapability,
+  type EventOccurrenceFilter,
   type GatewayMode,
   type GatewayRuntime,
   type GatewayStatus,
@@ -42,10 +47,6 @@ export interface MockRuntimeOptions {
   operatorToken?: string;
 }
 
-/**
- * In-memory mock implementation of GatewayRuntime for testing HTTP server,
- * operator API, auth pages, and CLI independently of the core engine.
- */
 export function createMockRuntime(
   options: MockRuntimeOptions = {},
 ): GatewayRuntime {
@@ -72,6 +73,9 @@ export function createMockRuntime(
   const tokens = new Map<string, ClientTokenRecord & { rawToken: string }>();
   const oauthClients = new Map<string, OAuthClientRecord>();
   const secrets = new Map<string, { value: string; description?: string; updatedAt: string }>();
+  const upstreamRedirectUri = `${publicUrl}/auth/oauth/callback`;
+  const upstreamStates = new Map<string, { id: string; expiresAt: number }>();
+  const upstreamConnections = new Set<string>();
   const authTickets = new Map<string, { sourceId: string; expiresAt: number }>();
   const eventTypes = new Map<string, McpEventTypeRecord>([
     [
@@ -121,6 +125,19 @@ export function createMockRuntime(
     return found;
   };
 
+  function requireHttpSource(id: string) {
+    const source = requireSource(id);
+    if (source.config.kind !== 'mcp_http') throw new GatewayError('INVALID_INPUT', 'Upstream OAuth requires an mcp_http source');
+    return { ...source, config: source.config };
+  }
+
+  function clearUpstreamOAuth(id: string) {
+    upstreamConnections.delete(id);
+    for (const [stateHash, record] of upstreamStates) {
+      if (record.id === id) upstreamStates.delete(stateHash);
+    }
+  }
+
   const requireProfile = (idOrName: string): ProfileRecord => {
     const direct = profiles.get(idOrName);
     if (direct) return direct;
@@ -142,6 +159,31 @@ export function createMockRuntime(
         description: source.config.description,
         uri: `skill://${source.config.slug}`,
         mimeType: 'text/markdown',
+        available: source.enabled,
+        lastSeenAt: ts,
+      });
+    } else if (source.config.kind === 'skill_repo') {
+      const parsed = parseGitHubSkillUrl(source.config.url, {
+        ref: source.config.ref,
+        path: source.config.path,
+      });
+      const slug = deriveRepoSourceName(parsed)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-|-$/g, '') || 'skill';
+      list.push({
+        id: `${source.id}:skill:${slug}`,
+        sourceId: source.id,
+        kind: 'skill',
+        originalName: slug,
+        description: `Imported from ${parsed.canonicalUrl}`,
+        uri: `skill://${slug}`,
+        mimeType: 'text/markdown',
+        metadata: {
+          skillSlug: slug,
+          skillContent: `# ${slug}\n\nImported from ${parsed.canonicalUrl}`,
+          tags: source.config.tags ?? [],
+        },
         available: source.enabled,
         lastSeenAt: ts,
       });
@@ -459,6 +501,82 @@ export function createMockRuntime(
       return { source: updated };
     },
 
+    async getUpstreamOAuthStatus(id) {
+      const { authConfig } = requireHttpSource(id);
+      const oauth = authConfig.kind === 'oauth2' ? authConfig.oauth : undefined;
+      return { configured: !!oauth, connected: upstreamConnections.has(id), redirectUri: upstreamRedirectUri,
+        hasRefreshToken: false, clientId: oauth?.clientId, authorizationEndpoint: oauth?.authorizationEndpoint,
+        tokenEndpoint: oauth?.tokenEndpoint };
+    },
+
+    async startUpstreamOAuth(id, options) {
+      const source = requireHttpSource(id);
+      const oauth = source.authConfig.oauth;
+      if (source.authConfig.kind !== 'oauth2' || !oauth) throw new GatewayError('INVALID_INPUT', 'Source is not configured for upstream OAuth');
+      const name = oauth.clientSecretName;
+      const clientSecret = options?.clientSecret;
+      if (clientSecret !== undefined && (!options?.ticket || !name || !clientSecret.length || clientSecret.length > MAX_SECRET_LENGTH)) {
+        throw new GatewayError('INVALID_INPUT', 'Unexpected or invalid OAuth client secret');
+      }
+      if (options?.ticket) {
+        const entry = authTickets.get(options.ticket);
+        if (!entry || entry.sourceId !== id || entry.expiresAt <= Date.now()) {
+          throw new GatewayError('FORBIDDEN', 'Invalid or expired auth ticket');
+        }
+        if (name && !clientSecret && !secrets.has(name)) {
+          throw new GatewayError('AUTH_REQUIRED', 'An OAuth client secret is required');
+        }
+        authTickets.delete(options.ticket);
+        if (name && clientSecret) secrets.set(name, { value: clientSecret, updatedAt: nowIso() });
+      }
+      if (name && !secrets.has(name)) throw new GatewayError('AUTH_REQUIRED', `Required vault secret '${name}' is missing`);
+      const state = randomUUID();
+      const codeChallenge = createHash('sha256').update(randomBytes(48).toString('base64url')).digest('base64url');
+      const authorizeUrl = new URL(oauth.authorizationEndpoint ?? new URL('/authorize', source.config.url).href);
+      for (const [key, value] of Object.entries({ ...oauth.extraAuthParams, state,
+        response_type: 'code', redirect_uri: upstreamRedirectUri, client_id: oauth.clientId ?? 'mock-client',
+        code_challenge: codeChallenge, code_challenge_method: 'S256', ...(oauth.resource ? { resource: oauth.resource } : {}),
+      })) {
+        authorizeUrl.searchParams.set(key, value);
+      }
+      if (oauth.scopes?.length) authorizeUrl.searchParams.set('scope', oauth.scopes.join(' '));
+      upstreamStates.set(hashToken(state), { id, expiresAt: Date.now() + 10 * 60_000 });
+      return { authorizeUrl: authorizeUrl.href, redirectUri: upstreamRedirectUri };
+    },
+
+    async completeUpstreamOAuth(params) {
+      const state = params.get('state');
+      if (!state) throw new GatewayError('INVALID_INPUT', 'Missing OAuth state parameter');
+      const stateHash = hashToken(state);
+      const entry = upstreamStates.get(stateHash);
+      upstreamStates.delete(stateHash);
+      if (!entry || entry.expiresAt <= Date.now()) throw new GatewayError('UNAUTHORIZED', 'OAuth authorization session is invalid or expired');
+      const code = params.get('code');
+      const error = params.get('error');
+      if (error) {
+        const vault = new InMemorySecretStore();
+        for (const [name, secret] of secrets) await vault.set(name, secret.value);
+        const description = params.get('error_description');
+        let message = `Upstream OAuth provider denied authorization: ${error}${description ? ': ' + description : ''}`;
+        for (const sensitive of [state, code, params.get('access_token'), params.get('refresh_token'), params.get('client_secret')]) {
+          if (sensitive) message = message.replaceAll(sensitive, '[REDACTED]');
+        }
+        throw new GatewayError('AUTH_REQUIRED', vault.redact(message));
+      }
+      if (!code) throw new GatewayError('INVALID_INPUT', 'Missing OAuth authorization code');
+      upstreamConnections.add(entry.id);
+      const { source, capabilities } = await this.refreshSource(entry.id);
+      return { source, capabilityCount: capabilities.length };
+    },
+
+    async disconnectUpstreamOAuth(id) {
+      const source = requireHttpSource(id);
+      if (!source.authConfig.oauth) throw new GatewayError('INVALID_INPUT', 'Source is not configured for upstream OAuth');
+      clearUpstreamOAuth(id);
+      sources.set(id, { ...source, health: source.enabled ? 'auth_required' : 'disabled',
+        lastError: source.enabled ? 'Upstream OAuth disconnected' : undefined, updatedAt: nowIso() });
+    },
+
     async listSources() {
       return [...sources.values()];
     },
@@ -488,13 +606,13 @@ export function createMockRuntime(
         config: input.config,
         authConfig: input.authConfig ?? { kind: 'none' },
         refreshPolicy: input.refreshPolicy ?? { mode: 'manual' },
-        health: input.enabled === false ? 'disabled' : 'healthy',
+        health: input.enabled === false ? 'disabled' : input.authConfig?.oauth ? 'auth_required' : 'healthy',
         lastRefreshedAt: ts,
         createdAt: ts,
         updatedAt: ts,
       };
       sources.set(id, record);
-      synthesizeCapabilitiesForSource(record);
+      if (!record.authConfig.oauth) synthesizeCapabilitiesForSource(record);
       return record;
     },
 
@@ -517,13 +635,18 @@ export function createMockRuntime(
               : existing.health,
         updatedAt: nowIso(),
       };
+      if (existing.authConfig.oauth && (!updated.authConfig.oauth ||
+        (existing.config.kind === 'mcp_http' && updated.config.kind === 'mcp_http' &&
+          new URL(existing.config.url).origin !== new URL(updated.config.url).origin))) clearUpstreamOAuth(id);
+      if (updated.authConfig.oauth && !upstreamConnections.has(id) && updated.enabled) updated.health = 'auth_required';
       sources.set(id, updated);
-      synthesizeCapabilitiesForSource(updated);
+      if (updated.health !== 'auth_required' || !updated.authConfig.oauth) synthesizeCapabilitiesForSource(updated);
       return updated;
     },
 
     async deleteSource(id: string) {
       requireSource(id);
+      clearUpstreamOAuth(id);
       sources.delete(id);
       for (const [capId, cap] of capabilities.entries()) {
         if (cap.sourceId === id) {
@@ -535,6 +658,10 @@ export function createMockRuntime(
 
     async refreshSource(id: string) {
       const source = requireSource(id);
+      if (source.enabled && source.authConfig.oauth && !upstreamConnections.has(id)) {
+        const test = await this.testSource(id);
+        throw new GatewayError('AUTH_REQUIRED', 'Upstream OAuth authorization is required', { authHandoff: test.authHandoff });
+      }
       const caps = synthesizeCapabilitiesForSource(source);
       const updated: SourceRecord = {
         ...source,
@@ -548,30 +675,31 @@ export function createMockRuntime(
 
     async testSource(id: string) {
       const source = requireSource(id);
-      if (source.authConfig.kind !== 'none' && source.authConfig.secretName) {
-        if (!secrets.has(source.authConfig.secretName)) {
-          const ticket = `tkt_${randomUUID().slice(0, 8)}`;
-          authTickets.set(ticket, {
+      const interactive = source.authConfig.kind === 'oauth2' && !!source.authConfig.oauth;
+      const name = source.authConfig.secretName;
+      const error = interactive
+        ? upstreamConnections.has(id) ? undefined : 'Upstream OAuth authorization is required'
+        : source.authConfig.kind !== 'none' && name && !secrets.has(name) ? `Missing secret '${name}'` : undefined;
+      if (error) {
+        const ticket = `tkt_${randomUUID().slice(0, 8)}`;
+        const expiresAt = Date.now() + 10 * 60_000;
+        authTickets.set(ticket, { sourceId: id, expiresAt });
+        return {
+          ok: false,
+          health: 'auth_required',
+          latencyMs: 5,
+          capabilityCount: 0,
+          error,
+          authHandoff: {
             sourceId: id,
-            expiresAt: Date.now() + 10 * 60 * 1000,
-          });
-          return {
-            ok: false,
-            health: 'auth_required',
-            latencyMs: 5,
-            capabilityCount: 0,
-            error: `Missing secret '${source.authConfig.secretName}'`,
-            authHandoff: {
-              sourceId: id,
-              authUrl: `${publicUrl}/auth/connect/${encodeURIComponent(id)}?ticket=${ticket}`,
-              ...(mode === 'local' && source.authConfig.cliLoginCommand
-                ? { cliCommand: source.authConfig.cliLoginCommand }
-                : {}),
-              reason: `Credentials required for ${source.name}`,
-              expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-            },
-          };
-        }
+            authUrl: `${publicUrl}/auth/connect/${encodeURIComponent(id)}?ticket=${ticket}`,
+            ...(mode === 'local' && source.authConfig.cliLoginCommand
+              ? { cliCommand: source.authConfig.cliLoginCommand }
+              : {}),
+            reason: `Credentials required for ${source.name}`,
+            expiresAt: new Date(expiresAt).toISOString(),
+          },
+        };
       }
       const count = [...capabilities.values()].filter(
         (c) => c.sourceId === id,
@@ -635,6 +763,29 @@ export function createMockRuntime(
         });
       }
       return result;
+    },
+
+    async getCapabilityContent(capabilityId: string) {
+      const cap = capabilities.get(capabilityId);
+      if (!cap) {
+        throw new GatewayError('CAPABILITY_NOT_FOUND', `Capability '${capabilityId}' not found`, 404);
+      }
+      const src = sources.get(cap.sourceId);
+      if (src?.config.kind === 'skill') {
+        return {
+          uri: cap.uri ?? `skill://${src.config.slug}`,
+          mimeType: cap.mimeType ?? 'text/markdown',
+          content: src.config.content,
+        };
+      }
+      if (src?.config.kind === 'skill_repo' && typeof cap.metadata?.skillContent === 'string') {
+        return {
+          uri: cap.uri ?? `skill://${cap.originalName}`,
+          mimeType: cap.mimeType ?? 'text/markdown',
+          content: cap.metadata.skillContent,
+        };
+      }
+      throw new GatewayError('NOT_FOUND', 'Capability has no previewable skill content', 404);
     },
 
     async draftOverlay(capabilityId: string, guidance?: string) {
@@ -742,6 +893,10 @@ export function createMockRuntime(
       }
       requireProfile(id);
       profiles.delete(id);
+      const revokedAt = nowIso();
+      for (const token of tokens.values()) {
+        if (token.profileId === id && !token.revokedAt) token.revokedAt = revokedAt;
+      }
     },
 
     async listTokens() {
@@ -929,11 +1084,7 @@ export function createMockRuntime(
       return profileId ? all.filter((s) => s.profileId === profileId) : all;
     },
 
-    async listEventOccurrences(filter?: {
-      name?: string;
-      afterCursor?: string;
-      limit?: number;
-    }) {
+    async listEventOccurrences(filter?: EventOccurrenceFilter) {
       let items = eventOccurrences;
       if (filter?.name) {
         items = items.filter((e) => e.name === filter.name);
@@ -945,7 +1096,7 @@ export function createMockRuntime(
         }
       }
       const limit = filter?.limit ?? 100;
-      return items.slice(-limit);
+      return filter?.order === 'desc' ? items.slice(-limit).reverse() : items.slice(-limit);
     },
 
     async emitEvent(input) {
@@ -1014,6 +1165,8 @@ export function createMockRuntime(
 
     async importConfig(bundle, options) {
       if (!options?.merge) {
+        upstreamStates.clear();
+        upstreamConnections.clear();
         sources.clear();
         overlays.clear();
         policies.clear();

@@ -17,7 +17,6 @@ interface ApprovalsState {
 
 const ApprovalsContext = createContext<ApprovalsState | null>(null);
 
-/** One live SSE connection shared by the nav badge, the overview alert, and the queue. */
 export function ApprovalsProvider({ enabled, children }: { enabled: boolean; children: ReactNode }) {
   const [pending, setPending] = useState<ApprovalRequestRecord[]>([]);
   const [connected, setConnected] = useState(false);

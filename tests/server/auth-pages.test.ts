@@ -43,6 +43,7 @@ describe('upstream auth handoff page', () => {
     const csp = res.headers.get('content-security-policy') ?? '';
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("form-action 'self'");
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
     expect(html).not.toContain('<https://example.com/tokens>');
@@ -100,6 +101,7 @@ describe('upstream auth handoff page', () => {
     const res = await h.call(path, form({ ticket, secret_0: 'only-the-first-value', secret_1: '   ' }));
     const html = await res.text();
     expect(res.status).toBe(400);
+    expect(res.headers.get('content-security-policy')).toContain("form-action 'self'");
     expect(html).toContain('A value for upstream_extra is required.');
     expect(html).not.toContain('only-the-first-value');
     expect((await h.json('/api/secrets')).body.secrets).toEqual([]);
@@ -127,6 +129,84 @@ describe('upstream auth handoff page', () => {
     const h = makeHarness();
     const { path, ticket } = await sourceNeedingAuth(h);
     expect((await h.call(`${path}?ticket=${ticket}`, { auth: false })).status).toBe(200);
+  });
+});
+
+describe('upstream OAuth pages', () => {
+  async function connect(h: Harness) {
+    const { body } = await h.json('/api/sources', { method: 'POST', json: {
+      name: '<img src=x onerror=alert(1)>', kind: 'mcp_http', config: { kind: 'mcp_http', url: 'https://example.com/mcp' },
+      authConfig: { kind: 'oauth2', oauth: { scopes: ['read'], clientId: 'fixture',
+        clientSecretName: 'fixture-client-secret', authorizationEndpoint: 'https://auth.example.com/authorize' } },
+    } });
+    const tested = await h.json(`/api/sources/${body.source.id}/test`, { method: 'POST' });
+    const handoff = new URL(tested.body.authHandoff.authUrl);
+    return { path: handoff.pathname, ticket: handoff.searchParams.get('ticket')! };
+  }
+
+  it('renders the OAuth handoff with escaped source details and an optional secret', async () => {
+    const h = makeHarness();
+    const { path, ticket } = await connect(h);
+    const response = await h.call(`${path}?ticket=${ticket}`, { auth: false });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(response.headers.get('content-security-policy')).not.toContain('form-action');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    const html = await response.text();
+    for (const text of ['&lt;img', 'https://example.com/mcp', '>read<', '/auth/oauth/callback',
+      'name="client_secret"', 'Leave empty if already saved in vault', 'Continue to OAuth sign-in']) {
+      expect(html).toContain(text);
+    }
+    expect(html).not.toContain('<img');
+  });
+
+  it('keeps tickets usable after form validation, then redirects exactly once and completes the callback', async () => {
+    const h = makeHarness();
+    const { path, ticket } = await connect(h);
+    const invalid = await h.call(path, form({ ticket, client_secret: 'a'.repeat(16_385) }));
+    expect(invalid.status).toBe(400);
+    expect(await invalid.text()).toContain('client secret is too long');
+    expect((await h.call(path, form({ ticket }))).status).toBe(401);
+    const post = await Promise.all([h.call(path, form({ ticket, client_secret: 'operator-fixture-value' })),
+      h.call(path, form({ ticket, client_secret: 'operator-fixture-value' }))]);
+    expect(post.map(reply => reply.status).sort()).toEqual([303, 403]);
+    const response = post.find(reply => reply.status === 303)!;
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    const authorizeUrl = new URL(response.headers.get('location')!);
+    expect(authorizeUrl.origin).toBe('https://auth.example.com');
+    expect(authorizeUrl.search).not.toContain('operator-fixture-value');
+    expect((await h.call(path, form({ ticket, client_secret: 'any' }))).status).toBe(403);
+    const params = new URLSearchParams({ state: authorizeUrl.searchParams.get('state')!, code: 'callback-private-code' });
+    const callback = '/auth/oauth/callback?' + params;
+    const complete = await h.call(callback, { auth: false });
+    expect(complete.status).toBe(200);
+    expect(complete.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(complete.headers.get('cache-control')).toBe('no-store');
+    const html = await complete.text();
+    expect(html).toContain('Connected &lt;img');
+    expect(html).toContain('1 capability discovered.');
+    expect(html).not.toContain('callback-private-code');
+    expect(html).not.toContain('operator-fixture-value');
+    expect((await h.call(callback, { auth: false })).status).toBe(401);
+    expect((await h.call('/auth/oauth/callback?state=invalid', { auth: false })).status).toBe(401);
+  });
+
+  it('escapes provider denial descriptions and redacts submitted credentials', async () => {
+    const h = makeHarness();
+    const { path, ticket } = await connect(h);
+    const started = await h.call(path, form({ ticket, client_secret: 'operator-fixture-value' }));
+    const state = new URL(started.headers.get('location')!).searchParams.get('state')!;
+    const params = new URLSearchParams({ state, error: 'access_denied',
+      error_description: '<script>alert(1)</script> operator-fixture-value' });
+    const response = await h.call('/auth/oauth/callback?' + params, { auth: false });
+    expect(response.status).toBe(401);
+    const html = await response.text();
+    expect(html).toContain('access_denied');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt; [REDACTED]');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('operator-fixture-value');
   });
 });
 

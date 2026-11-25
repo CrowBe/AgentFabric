@@ -46,12 +46,37 @@ describe('agentfabric CLI', () => {
   it('lists starter recipes without a gateway or token', async () => {
     const b = bench({ env: {}, fetch: (() => Promise.reject(new Error('offline'))) as typeof fetch });
     expect(await runCli(['recipes', 'list'], b.io)).toBe(0);
-    for (const id of ['mcp-stdio-generic', 'mcp-http-remote', 'openconnector-http', 'cli-wrapper-readonly', 'shared-workspace-folder', 'agent-skill']) {
+    for (const id of ['mcp-stdio-generic', 'mcp-http-remote', 'mcp-http-oauth', 'openconnector-http', 'cli-wrapper-readonly', 'shared-workspace-folder', 'agent-skill', 'github-skill-repo']) {
       expect(b.out()).toContain(id);
     }
     const json = bench({ env: {} });
     await runCli(['recipes', 'list', '--json'], json.io);
-    expect(JSON.parse(json.out()).recipes).toHaveLength(6);
+    expect(JSON.parse(json.out()).recipes).toHaveLength(8);
+  });
+
+  it('imports and lists GitHub skills and manages capability proposals', async () => {
+    const b = bench();
+    expect(
+      await runCli(
+        ['skills', 'add', 'https://github.com/kunchenguid/vision', '--name', 'vision', '--tag', 'strategy'],
+        b.io,
+      ),
+    ).toBe(0);
+    expect(b.out()).toContain('Imported 1 skill(s) from vision');
+
+    const listed = bench({ fetch: b.io.fetch });
+    expect(await runCli(['skills', 'list'], listed.io)).toBe(0);
+    expect(listed.out()).toContain('skill://vision');
+
+    const prop = await b.h.runtime.exportConfig();
+    expect(prop.sources[0]?.kind).toBe('skill_repo');
+
+    const proposal = await b.h.json('/api/proposals');
+    expect(proposal.status).toBe(200);
+    expect(await runCli(['proposals', 'list'], bench({ fetch: b.io.fetch }).io)).toBe(0);
+    const badActivate = bench({ fetch: b.io.fetch });
+    expect(await runCli(['proposals', 'activate', 'missing'], badActivate.io)).toBe(1);
+    expect(badActivate.err()).toContain('404');
   });
 
   it('shows status using the operator token', async () => {

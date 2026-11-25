@@ -29,10 +29,6 @@ const UI_CSP = [
 const NOT_BUILT =
   'AgentFabric Web UI is not built. Run `npm run build:web`, or use the REST API at /api.';
 
-/**
- * Serve the built operator UI with SPA fallback. Node-only: `node:fs` is imported lazily
- * so the same app can run on runtimes without a filesystem.
- */
 export function createStaticHandler(rootDir: string): Handler {
   return async (c) => {
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
@@ -58,18 +54,30 @@ export function createStaticHandler(rootDir: string): Handler {
     const candidate = path.resolve(root, `.${requested}`);
     const inside = candidate === root || candidate.startsWith(root + path.sep);
     const extension = path.extname(candidate).toLowerCase();
+    const indexFile = path.join(root, 'index.html');
 
-    const send = async (file: string, isIndex: boolean): Promise<Response | null> => {
+    const confined = async (file: string) => {
       try {
-        const stat = await fs.stat(file);
+        const [realRoot, realFile] = await Promise.all([fs.realpath(root), fs.realpath(file)]);
+        return realFile === realRoot || realFile.startsWith(realRoot + path.sep) ? realFile : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const send = async (file: string, isDocument: boolean): Promise<Response | null> => {
+      const real = await confined(file);
+      if (!real) return null;
+      try {
+        const stat = await fs.stat(real);
         if (!stat.isFile()) return null;
-        const body = await fs.readFile(file);
+        const body = await fs.readFile(real);
         const headers: Record<string, string> = {
           'content-type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
           'x-content-type-options': 'nosniff',
-          'cache-control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
+          'cache-control': isDocument ? 'no-cache' : 'public, max-age=31536000, immutable',
         };
-        if (isIndex) {
+        if (isDocument) {
           headers['content-security-policy'] = UI_CSP;
           headers['referrer-policy'] = 'no-referrer';
         }
@@ -80,11 +88,11 @@ export function createStaticHandler(rootDir: string): Handler {
     };
 
     if (inside && extension && candidate !== root) {
-      const asset = await send(candidate, false);
+      const asset = await send(candidate, extension === '.html' || candidate === indexFile);
       if (asset) return asset;
       return c.text('Not found', 404);
     }
-    const index = await send(path.join(root, 'index.html'), true);
+    const index = await send(indexFile, true);
     return index ?? c.text(NOT_BUILT, 404);
   };
 }

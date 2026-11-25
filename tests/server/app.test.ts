@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -168,6 +168,8 @@ describe('static web UI', () => {
     await writeFile(path.join(dir, 'index.html'), '<!doctype html><title>UI</title>');
     await writeFile(path.join(dir, 'assets', 'app-abc.js'), 'console.log(1)');
     await writeFile(path.join(parent, 'af-secret.txt'), 'top secret');
+    await symlink(path.join(parent, 'af-secret.txt'), path.join(dir, 'assets', 'leak.txt'));
+    await symlink(path.join(dir, 'assets', 'app-abc.js'), path.join(dir, 'assets', 'alias.js'));
   });
   afterAll(async () => {
     await rm(parent, { recursive: true, force: true });
@@ -191,6 +193,25 @@ describe('static web UI', () => {
     expect(asset.headers.get('content-type')).toContain('javascript');
     expect(asset.headers.get('cache-control')).toContain('immutable');
     expect((await h.call('/assets/missing.js', { auth: false })).status).toBe(404);
+  });
+
+  it('serves /index.html with the same locked-down document headers as the SPA fallback', async () => {
+    const h = makeHarness({ staticDir: dir });
+    const res = await h.call('/index.html', { auth: false });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+  });
+
+  it('refuses symlinks that resolve outside the static root but follows ones inside it', async () => {
+    const h = makeHarness({ staticDir: dir });
+    const escaped = await h.call('/assets/leak.txt', { auth: false });
+    expect(escaped.status).toBe(404);
+    expect(await escaped.text()).not.toContain('top secret');
+    const internal = await h.call('/assets/alias.js', { auth: false });
+    expect(internal.status).toBe(200);
+    expect(await internal.text()).toBe('console.log(1)');
   });
 
   it('blocks path traversal', async () => {

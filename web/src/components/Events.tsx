@@ -30,13 +30,13 @@ export function Events() {
   const [name, setName] = useState(ALL);
   const [live, setLive] = useState(true);
   const occurrences = useResource(
-    () => api.eventOccurrences({ ...(name !== ALL ? { name } : {}), limit: 100 }),
+    () => api.eventOccurrences({ ...(name !== ALL ? { name } : {}), limit: 100, order: 'desc' }),
     [name],
     { intervalMs: live ? 5000 : undefined },
   );
 
   const typeOptions = (types.data ?? []).map((t) => ({ value: t.name, label: t.name }));
-  const rows = [...(occurrences.data ?? [])].reverse();
+  const rows = occurrences.data ?? [];
 
   async function removeSubscription(id: string) {
     if (!(await ask('Delete subscription?', 'The subscriber stops receiving this event until it subscribes again.', 'Delete'))) return;

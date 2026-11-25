@@ -3,6 +3,8 @@ import {
   type CreateSourceInput,
   type SourceKind,
 } from '../types/index.js';
+import { upstreamOAuthSchema } from '../validation/upstream-oauth.js';
+import { deriveRepoSourceName, parseGitHubSkillUrl } from '../upstreams/github-skills.js';
 
 export type RecipeFieldType =
   | 'text'
@@ -29,7 +31,6 @@ export interface StarterRecipe {
   title: string;
   description: string;
   kind: SourceKind;
-  /** Spawns local processes or reads the local disk, so it is refused in remote mode. */
   localOnly: boolean;
   fields: RecipeField[];
   build(values: RecipeValues): CreateSourceInput;
@@ -219,6 +220,58 @@ export const STARTER_RECIPES: readonly StarterRecipe[] = [
     },
   },
   {
+    id: 'mcp-http-oauth',
+    title: 'Remote MCP server (OAuth 2.0 / 2.1)',
+    description: 'Connect a remote MCP server through OAuth discovery or a pre-registered client.',
+    kind: 'mcp_http',
+    localOnly: false,
+    fields: [
+      nameField,
+      { name: 'url', label: 'MCP endpoint URL', type: 'text', required: true, placeholder: 'https://example.com/mcp' },
+      { name: 'scopes', label: 'OAuth scopes', type: 'list',
+        help: 'Optional OAuth scopes (one per line or comma-separated). Leave empty to use server defaults.' },
+      { name: 'clientId', label: 'OAuth client ID', type: 'text',
+        help: 'Optional pre-registered OAuth client ID. Leave empty to use Dynamic Client Registration.' },
+      { name: 'clientSecretName', label: 'OAuth client secret name', type: 'text', placeholder: 'oauth_client_secret',
+        help: 'Optional vault secret name holding your pre-registered client secret.' },
+      { name: 'authorizationEndpoint', label: 'Authorization endpoint', type: 'text', placeholder: 'https://auth.example.com/authorize',
+        help: 'Optional override; leave empty for automatic discovery.' },
+      { name: 'tokenEndpoint', label: 'Token endpoint', type: 'text', placeholder: 'https://auth.example.com/token',
+        help: 'Optional override; leave empty for automatic discovery.' },
+      { name: 'extraAuthParams', label: 'Extra authorization parameters', type: 'list', placeholder: 'access_type=offline\nprompt=consent',
+        help: 'Optional extra authorization query parameters (key=value per line).' },
+    ],
+    build(values) {
+      if (values.extraAuthParams != null && !Array.isArray(values.extraAuthParams) && typeof values.extraAuthParams !== 'string') {
+        throw invalid('Extra authorization parameters must be a list of key=value entries');
+      }
+      const params = lines(values, 'extraAuthParams').map(entry => {
+        const split = entry.indexOf('=');
+        const key = split < 0 ? '' : entry.slice(0, split).trim();
+        if (!key) throw invalid('Extra authorization parameters must use key=value');
+        return [key, entry.slice(split + 1).trim()];
+      });
+      const scopes = list(values, 'scopes');
+      const oauth = upstreamOAuthSchema.safeParse({
+        ...Object.fromEntries(['clientId', 'clientSecretName', 'authorizationEndpoint', 'tokenEndpoint']
+          .flatMap(name => {
+            const value = text(values, name, false);
+            return value ? [[name, value]] : [];
+          })),
+        ...(scopes.length ? { scopes } : {}),
+        ...(params.length ? { extraAuthParams: Object.fromEntries(params) } : {}),
+      });
+      if (!oauth.success) throw invalid('Invalid OAuth recipe configuration');
+      return {
+        name: text(values, 'name', true) as string,
+        kind: 'mcp_http',
+        config: { kind: 'mcp_http', url: text(values, 'url', true) as string },
+        authConfig: { kind: 'oauth2', oauth: oauth.data },
+        refreshPolicy: { mode: 'manual' },
+      };
+    },
+  },
+  {
     id: 'openconnector-http',
     title: 'OpenConnector (HTTP MCP)',
     description:
@@ -249,9 +302,8 @@ export const STARTER_RECIPES: readonly StarterRecipe[] = [
   },
   {
     id: 'cli-wrapper-readonly',
-    title: 'Read-only CLI wrapper',
-    description:
-      'Expose one CLI invocation as a typed tool with bounded output. Arguments come only from the declared input schema. Local mode only.',
+    title: 'CLI wrapper',
+    description: 'Expose one typed CLI invocation with bounded output and explicit argument templating. Local mode only.',
     kind: 'cli_wrapper',
     localOnly: true,
     fields: [
@@ -382,6 +434,77 @@ export const STARTER_RECIPES: readonly StarterRecipe[] = [
       };
     },
   },
+  {
+    id: 'github-skill-repo',
+    title: 'Skills from GitHub repository',
+    description:
+      'Import a SKILL.md or skill collection directly from a GitHub repository URL and serve it over MCP.',
+    kind: 'skill_repo',
+    localOnly: false,
+    fields: [
+      {
+        name: 'url',
+        label: 'GitHub URL or owner/repo',
+        type: 'text',
+        required: true,
+        placeholder: 'https://github.com/<owner>/<repo>',
+        help: 'Accepts repository URLs, /tree/<ref>/<subpath>, /blob/.../SKILL.md, or <owner>/<repo>.',
+      },
+      {
+        name: 'name',
+        label: 'Source name (optional)',
+        type: 'text',
+        placeholder: 'auto-detected from URL',
+      },
+      {
+        name: 'ref',
+        label: 'Branch, tag, or commit (optional)',
+        type: 'text',
+        placeholder: 'HEAD (default branch)',
+      },
+      {
+        name: 'path',
+        label: 'Subpath in repo (optional)',
+        type: 'text',
+        placeholder: 'skills/vision',
+      },
+      { name: 'includeSkills', label: 'Only include slugs (optional)', type: 'list' },
+      { name: 'tags', label: 'Tags (optional)', type: 'list' },
+      {
+        name: 'secretName',
+        label: 'GitHub token secret (private repos)',
+        type: 'text',
+        placeholder: 'github_pat',
+        help: 'Optional vault secret name for private repositories. Not needed for public repos.',
+      },
+    ],
+    build(values) {
+      const url = text(values, 'url', true) as string;
+      const ref = text(values, 'ref', false);
+      const path = text(values, 'path', false);
+      const parsed = parseGitHubSkillUrl(url, {
+        ...(ref ? { ref } : {}),
+        ...(path ? { path } : {}),
+      });
+      const name = text(values, 'name', false) ?? deriveRepoSourceName(parsed);
+      const includeSkills = list(values, 'includeSkills');
+      const tags = list(values, 'tags');
+      return {
+        name,
+        kind: 'skill_repo',
+        config: {
+          kind: 'skill_repo',
+          url: parsed.canonicalUrl,
+          ...(parsed.ref ? { ref: parsed.ref } : {}),
+          ...(parsed.path ? { path: parsed.path } : {}),
+          ...(includeSkills.length > 0 ? { includeSkills } : {}),
+          ...(tags.length > 0 ? { tags } : {}),
+        },
+        ...bearerAuth(values),
+        refreshPolicy: { mode: 'manual' },
+      };
+    },
+  },
 ];
 
 export function listRecipes(): RecipeSummary[] {
@@ -392,7 +515,6 @@ export function getRecipe(id: string): StarterRecipe | undefined {
   return STARTER_RECIPES.find((recipe) => recipe.id === id);
 }
 
-/** Turn operator-entered recipe values into a source create input. */
 export function instantiateRecipe(
   id: string,
   values: RecipeValues,

@@ -173,7 +173,6 @@ export class Events {
     await Promise.all(Object.entries(definitions).map(([name, description]) => this.storage.upsertEventType({
       name, description, sourceId: 'gateway', inputSchema: emptySchema, payloadSchema, supportedModes: [...deliveryModes],
     })));
-    // Persisted cursors remain monotonic if the clock moves backwards across a restart.
     for (;;) {
       const tail = await this.storage.listEventOccurrences({ afterCursor: String(this.head), limit: 1000 });
       if (!tail.length) break;
@@ -568,7 +567,6 @@ export class Events {
         const page = await this.page(current.profileId, current.name, currentCursor, 1);
         const event = page.events[0];
         if (event) {
-          // The previous watermark remains safe if the endpoint receives the message but fails to acknowledge.
           const key = signingKey(await this.secrets.get(current.secretName) ?? undefined);
           const pending = this.messages.get(current.id);
           const messageId = pending && pending.cursor === event.cursor ? pending.id : 'msg_' + randomUUID();

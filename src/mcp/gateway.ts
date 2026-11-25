@@ -1,13 +1,13 @@
 import { SKILLS_EXTENSION_ID, SKILLS_LIST_METHOD, SKILLS_GET_METHOD, RESOURCES_DIRECTORY_READ_METHOD,
   GetSkillRequestParamsSchema, ReadResourceDirectoryRequestParamsSchema, ListSkillsRequestParamsSchema } from '@modelcontextprotocol/core/ext/skills';
-import { UriTemplate } from '@modelcontextprotocol/client';
+import { UriTemplate, type ElicitationCompleteNotificationParams, type ElicitRequestParams, type ElicitResult } from '@modelcontextprotocol/client';
 import type * as T from '../types/index.js';
 import { GatewayError } from '../types/index.js';
 import type { ClientIdentity } from '../auth/middleware.js';
 import { visibleCapability } from '../governance/policy.js';
 import type { Proposals } from '../governance/proposals.js';
 import type { Telemetry } from '../governance/telemetry.js';
-import { skillEntry } from '../upstreams/skills.js';
+import { repoSkillEntry, skillEntry, skillMimeType, type StoredSkillMetadata } from '../upstreams/skills.js';
 import { emptySchema, validateArguments } from '../validation/schema.js';
 import { deliveryModes, Events, eventsExtension } from './events.js';
 
@@ -36,13 +36,19 @@ const builtins = [
     inputSchema: schema({ capability: string, kind: { enum: kinds }, arguments: object }, ['capability']),
   },
   {
-    name: 'fabric_propose_capability', description: 'Submit a CLI wrapper or composite definition for operator review.',
-    inputSchema: schema({ kind: { enum: ['cli_wrapper', 'composite'] }, name: string, description: { type: 'string' }, definition: object },
+    name: 'fabric_propose_capability', description: 'Submit a CLI wrapper, composite tool, skill, or GitHub skill repo for operator review.',
+    inputSchema: schema({ kind: { enum: ['cli_wrapper', 'composite', 'skill', 'skill_repo'] }, name: string, description: { type: 'string' }, definition: object },
       ['name', 'description', 'definition']),
   },
 ].map(tool => ({ ...tool, inputSchema: { ...tool.inputSchema, additionalProperties: false } }));
 
-export type InvocationContext = { profileId: string; sessionId?: string; clientName?: string; identity: ClientIdentity; signal?: AbortSignal };
+export type Elicitation = {
+  elicit?: (params: ElicitRequestParams) => Promise<ElicitResult>;
+  notifyElicitationComplete?: (params: ElicitationCompleteNotificationParams) => void;
+};
+export type InvocationContext = Elicitation & {
+  profileId: string; sessionId?: string; clientName?: string; identity: ClientIdentity; signal?: AbortSignal;
+};
 type Invoke = (cap: T.EffectiveCapability, args: unknown, context: InvocationContext, resourceUri?: string) => Promise<unknown>;
 
 function find(catalog: T.EffectiveCapability[], name: string, kind?: T.CapabilityKind, exposure?: 'direct') {
@@ -80,12 +86,30 @@ export class McpGateway {
   constructor(private readonly storage: T.StorageAdapter, private readonly secrets: T.SecretStore,
     private readonly catalog: (profileId: string) => Promise<T.EffectiveCapability[]>,
     private readonly invoke: Invoke, private readonly proposals: Proposals, private readonly telemetry: Telemetry,
-    readonly events: Events) {}
+    readonly events: Events, private readonly publicUrl?: string) {}
 
-  private async skillConfig(cap: T.EffectiveCapability) {
+  private async resolveSkill(cap: T.EffectiveCapability) {
     const source = await this.storage.getSource(cap.sourceId);
-    if (source?.config.kind !== 'skill') throw new GatewayError('CAPABILITY_NOT_FOUND', 'Skill is unavailable');
-    return source.config;
+    const redact = (text: string) => this.secrets.redact(text);
+    if (source?.config.kind === 'skill') {
+      return {
+        entry: skillEntry(source.config, redact),
+        files: {} as Record<string, string>,
+        mainSize: Buffer.byteLength(redact(source.config.content)),
+      };
+    }
+    if (source?.config.kind === 'skill_repo') {
+      const raw = await this.storage.getCapability(cap.id);
+      const meta = raw?.metadata as StoredSkillMetadata | undefined;
+      if (typeof meta?.skillContent === 'string') {
+        const entry = repoSkillEntry(cap.originalName, meta, redact);
+        const files = Object.fromEntries(
+          Object.entries(meta.skillFiles ?? {}).map(([rel, text]) => [rel, redact(text)]),
+        );
+        return { entry, files, mainSize: Buffer.byteLength(redact(meta.skillContent)) };
+      }
+    }
+    throw new GatewayError('CAPABILITY_NOT_FOUND', 'Skill is unavailable');
   }
 
   async dispatch(method: string, params: Record<string, unknown>, identity: ClientIdentity, context: InvocationContext): Promise<unknown> {
@@ -134,8 +158,10 @@ export class McpGateway {
             case 'fabric_call':
               return callResult(await this.invoke(find(catalog, String(args.capability), args.kind as T.CapabilityKind | undefined),
                 args.arguments ?? {}, context));
-            default:
-              return callResult(redact(await this.proposals.create(args, context.profileId, context.sessionId)));
+            default: {
+              const created = await this.proposals.create(args, context.profileId, context.sessionId);
+              return callResult(redact({ ...created, ...(this.publicUrl ? { reviewUrl: `${this.publicUrl}/#/safety` } : {}) }));
+            }
           }
         });
       }
@@ -170,7 +196,8 @@ export class McpGateway {
       case 'resources/read': {
         const uri = readName(params, 'uri');
         const candidates = visible.filter(cap => cap.kind === 'skill' || (cap.kind === 'resource' && cap.exposure === 'direct'));
-        let found = candidates.find(cap => cap.uri === uri);
+        let found = candidates.find(cap => cap.uri === uri)
+          ?? candidates.find(cap => cap.kind === 'skill' && cap.uri && uri.startsWith(`${cap.uri}/`));
         if (!found) {
           for (const cap of candidates) {
             const raw = await this.storage.getCapability(cap.id);
@@ -188,21 +215,33 @@ export class McpGateway {
       case SKILLS_LIST_METHOD: {
         if (!ListSkillsRequestParamsSchema.safeParse(params).success) throw new GatewayError('INVALID_INPUT', 'Invalid skill list parameters');
         const skills = await Promise.all(visible.filter(cap => cap.kind === 'skill' && cap.available).map(async cap =>
-          skillEntry(await this.skillConfig(cap), text => this.secrets.redact(text))));
+          (await this.resolveSkill(cap)).entry));
         return { skills, ttlMs: 0, cacheScope: 'private' };
       }
       case SKILLS_GET_METHOD:
       case RESOURCES_DIRECTORY_READ_METHOD: {
         const parsed = (method === SKILLS_GET_METHOD ? GetSkillRequestParamsSchema : ReadResourceDirectoryRequestParamsSchema).safeParse(params);
         if (!parsed.success) throw new GatewayError('INVALID_INPUT', 'A skill URI is required');
-        const cap = visible.find(cap => cap.kind === 'skill' && cap.available && cap.uri === parsed.data.uri);
+        const normalizedUri = parsed.data.uri.length > 'skill://'.length
+          ? parsed.data.uri.replace(/\/SKILL\.md$/, '').replace(/\/+$/, '')
+          : parsed.data.uri;
+        const cap = visible.find(c => c.kind === 'skill' && c.available && (c.uri === parsed.data.uri || c.uri === normalizedUri));
         if (!cap) throw new GatewayError('CAPABILITY_NOT_FOUND', 'Skill is unavailable to this profile');
         await this.invoke(cap, {}, context, cap.uri);
-        const config = await this.skillConfig(cap);
-        const skill = skillEntry(config, text => this.secrets.redact(text));
-        return method === SKILLS_GET_METHOD ? { skill, ttlMs: 0, cacheScope: 'private' } : {
-          resources: [{ uri: skill.uri, name: 'SKILL.md', mimeType: 'text/markdown', size: Buffer.byteLength(this.secrets.redact(config.content)) }],
-          ttlMs: 0, cacheScope: 'private',
+        const { entry: skill, files, mainSize } = await this.resolveSkill(cap);
+        if (method === SKILLS_GET_METHOD) return { skill, ttlMs: 0, cacheScope: 'private' };
+        return {
+          resources: [
+            { uri: skill.uri, name: 'SKILL.md', mimeType: 'text/markdown', size: mainSize },
+            ...Object.entries(files).map(([relPath, text]) => ({
+              uri: `${skill.uri}/${relPath}`,
+              name: relPath,
+              mimeType: skillMimeType(relPath),
+              size: Buffer.byteLength(text),
+            })),
+          ],
+          ttlMs: 0,
+          cacheScope: 'private',
         };
       }
     }

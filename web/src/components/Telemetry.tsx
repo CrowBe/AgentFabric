@@ -195,7 +195,7 @@ function Portability() {
       !merge &&
       !(await ask(
         'Replace existing configuration?',
-        'Existing sources, overlays and policies are replaced by this bundle. Export first if you might want them back.',
+        'Existing sources, overlays, profiles and policies are replaced by this bundle. Export first if you might want them back.',
         'Replace',
       ))
     ) {
@@ -232,7 +232,7 @@ function Portability() {
           />
         </div>
         <TextAreaField label="Configuration JSON" value={text} onChange={setText} rows={8} mono description="Choose a file or paste an exported bundle." />
-        <SwitchField label="Merge with existing configuration" checked={merge} onChange={setMerge} description={merge ? 'Existing entries are kept.' : 'Existing sources, overlays and policies are replaced.'} />
+        <SwitchField label="Merge with existing configuration" checked={merge} onChange={setMerge} description={merge ? 'Existing IDs in the bundle overwrite matching entries; omitted entries stay.' : 'Existing sources, overlays, profiles and policies are replaced.'} />
         {error ? <Notice tone="error">{error}</Notice> : null}
         {result ? <Notice tone="ok">{result}</Notice> : null}
         <div className="row">

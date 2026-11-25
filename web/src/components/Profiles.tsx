@@ -235,7 +235,7 @@ function ProfileEditor({
             value={budget}
             onChange={setBudget}
             type="number"
-            description="Maximum tools listed directly. Everything beyond it should be searchable."
+            description="Maximum pooled tools exposed directly in tools/list, excluding the 4 built-in fabric_* tools."
           />
 
           <Meter value={direct.length} min={0} max={Math.max(profile.directToolBudget, direct.length, 1)} format={(v: number) => `${v} of ${profile.directToolBudget}`}>
@@ -267,7 +267,7 @@ function ProfileEditor({
         </div>
       </Card>
 
-      <Card title="Visibility & permission rules" description="Rules narrow or widen what this profile sees. Later rules win when they match the same capability.">
+      <Card title="Visibility & permission rules" description="Rules narrow or widen what this profile sees. Later matching rules set exposure; permissions keep the strictest match (deny > require_approval > allow).">
         <RulesEditor rules={rules} onChange={setRules} sources={(sources.data ?? []).map((s) => ({ value: s.id, label: s.name }))} />
         {error ? <Notice tone="error">{error}</Notice> : null}
         <div className="row end">

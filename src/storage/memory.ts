@@ -15,6 +15,8 @@ interface Tables {
   oauth_codes: T.OAuthAuthorizationCodeRecord;
   oauth_refresh_tokens: T.OAuthRefreshTokenRecord;
   auth_tickets: T.AuthTicketRecord;
+  upstream_oauth_states: T.UpstreamOAuthStateRecord;
+  upstream_oauth_tokens: T.UpstreamOAuthTokenRecord;
   event_types: T.McpEventTypeRecord;
   event_occurrences: T.McpEventOccurrence;
   event_subscriptions: T.McpEventSubscriptionRecord;
@@ -25,6 +27,7 @@ export const tables = {
   policies: [], approvals: ['status'], proposals: ['status'],
   telemetry: ['profileId', 'sourceId', 'timestamp'], client_tokens: ['tokenHash'],
   oauth_clients: [], oauth_codes: [], oauth_refresh_tokens: [], auth_tickets: ['sourceId'],
+  upstream_oauth_states: ['sourceId'], upstream_oauth_tokens: [],
   event_types: ['sourceId'], event_occurrences: ['name', 'cursor'], event_subscriptions: ['profileId'],
 } satisfies Record<keyof Tables, string[]>;
 
@@ -65,6 +68,8 @@ export abstract class RecordStorage implements T.StorageAdapter {
     await this.replaceSourceCapabilities(id, []);
     await Promise.all(caps.map(cap => this.deleteOverlay(cap.id)));
     await this.deleteEventTypesBySource(id);
+    await this.deleteUpstreamOAuthToken(id);
+    await this.deleteUpstreamOAuthStatesBySource(id);
   }
   listCapabilities(sourceId?: string) { return this.scan('capabilities', { sourceId }); }
   getCapability(id: string) { return this.read('capabilities', id); }
@@ -129,6 +134,7 @@ export abstract class RecordStorage implements T.StorageAdapter {
     assertHash(row.codeHash);
     return this.write('oauth_codes', row.codeHash, row);
   }
+  getOAuthCode(hash: string) { return this.read('oauth_codes', hash); }
   consumeOAuthCode(hash: string) { return this.take('oauth_codes', hash); }
   saveOAuthRefreshToken(row: T.OAuthRefreshTokenRecord) {
     assertHash(row.tokenHash);
@@ -139,14 +145,26 @@ export abstract class RecordStorage implements T.StorageAdapter {
     const row = await this.read('oauth_refresh_tokens', hash);
     if (row) await this.saveOAuthRefreshToken({ ...row, revokedAt });
   }
-  async revokeOAuthRefreshTokensByClient(clientId: string, revokedAt: string) {
-    const rows = await this.scan('oauth_refresh_tokens');
-    await Promise.all(
-      rows
-        .filter((row) => row.clientId === clientId && !row.revokedAt)
-        .map((row) => this.saveOAuthRefreshToken({ ...row, revokedAt })),
-    );
+  revokeOAuthRefreshTokensByClient(clientId: string, revokedAt: string) {
+    return this.revokeOAuthRefreshTokensWhere(row => row.clientId === clientId, revokedAt);
   }
+  revokeOAuthRefreshTokensByProfile(profileId: string, revokedAt: string) {
+    return this.revokeOAuthRefreshTokensWhere(row => row.profileId === profileId, revokedAt);
+  }
+  private async revokeOAuthRefreshTokensWhere(selected: (row: T.OAuthRefreshTokenRecord) => boolean, revokedAt: string) {
+    const rows = await this.scan('oauth_refresh_tokens');
+    await Promise.all(rows.filter(row => selected(row) && !row.revokedAt)
+      .map(row => this.saveOAuthRefreshToken({ ...row, revokedAt })));
+  }
+  saveUpstreamOAuthState(row: T.UpstreamOAuthStateRecord) {
+    assertHash(row.stateHash);
+    return this.write('upstream_oauth_states', row.stateHash, row);
+  }
+  consumeUpstreamOAuthState(hash: string) { return this.take('upstream_oauth_states', hash); }
+  deleteUpstreamOAuthStatesBySource(sourceId: string) { return this.replace('upstream_oauth_states', { sourceId }, []); }
+  getUpstreamOAuthToken(sourceId: string) { return this.read('upstream_oauth_tokens', sourceId); }
+  upsertUpstreamOAuthToken(row: T.UpstreamOAuthTokenRecord) { return this.write('upstream_oauth_tokens', row.sourceId, row); }
+  deleteUpstreamOAuthToken(sourceId: string) { return this.remove('upstream_oauth_tokens', sourceId); }
   saveAuthTicket(row: T.AuthTicketRecord) {
     assertHash(row.ticketHash);
     return this.write('auth_tickets', row.ticketHash, row);
@@ -160,10 +178,11 @@ export abstract class RecordStorage implements T.StorageAdapter {
   upsertEventType(row: T.McpEventTypeRecord) { return this.write('event_types', JSON.stringify([row.sourceId, row.name]), row); }
   deleteEventTypesBySource(sourceId: string) { return this.replace('event_types', { sourceId }, []); }
   appendEventOccurrence(row: T.McpEventOccurrence) { return this.write('event_occurrences', row.eventId, row); }
-  async listEventOccurrences(filter: { name?: string; afterCursor?: string; limit?: number } = {}) {
+  async listEventOccurrences(filter: T.EventOccurrenceFilter = {}) {
+    const direction = filter.order === 'desc' ? -1 : 1;
     return (await this.scan('event_occurrences', { name: filter.name }))
       .filter(row => filter.afterCursor === undefined || Number(row.cursor) > Number(filter.afterCursor))
-      .sort((a, b) => Number(a.cursor) - Number(b.cursor))
+      .sort((a, b) => direction * (Number(a.cursor) - Number(b.cursor)))
       .slice(0, filter.limit ?? 100);
   }
   listEventSubscriptions(profileId?: string) { return this.scan('event_subscriptions', { profileId }); }

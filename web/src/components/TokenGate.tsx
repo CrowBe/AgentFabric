@@ -10,7 +10,6 @@ import { LogInIcon } from 'lucide-react';
 import { ApiError, api, clearToken, setToken } from '../api';
 import { Button, Notice, TextField } from './ui';
 
-/** Blocks the console until a valid operator token is provided. Never closable. */
 export function TokenGate({ onAuthed, reason }: { onAuthed: () => void; reason?: string }) {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | undefined>(reason);

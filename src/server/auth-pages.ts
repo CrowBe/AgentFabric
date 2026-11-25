@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { MAX_SECRET_LENGTH } from '../auth/handoff.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
   GatewayError,
@@ -7,16 +8,6 @@ import {
   type OAuthAuthorizeValidationSuccess,
   type SourceRecord,
 } from '../types/index.js';
-
-const MAX_SECRET_LENGTH = 16 * 1024;
-const BLOCKED_REDIRECT_PROTOCOLS = new Set([
-  'javascript:',
-  'data:',
-  'vbscript:',
-  'file:',
-  'blob:',
-  'about:',
-]);
 
 export function escapeHtml(value: unknown): string {
   return String(value)
@@ -59,7 +50,6 @@ function nonce(): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-/** Render a self-contained page with a per-response style nonce and a locked-down CSP. */
 export function htmlPage(
   c: Context,
   options: {
@@ -112,7 +102,7 @@ function messagePage(
 
 function safeRedirect(target: string): string {
   const url = new URL(target);
-  if (BLOCKED_REDIRECT_PROTOCOLS.has(url.protocol)) {
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.hash) {
     throw new GatewayError('INTERNAL_ERROR', 'Refusing unsafe redirect target');
   }
   return url.toString();
@@ -193,6 +183,32 @@ ${fields
   .join('\n')}
 <button class="primary" type="submit">Save credentials</button>
 </form>`;
+}
+
+function oauthConnectPage(c: Context, runtime: GatewayRuntime, source: SourceRecord, ticket: string, error?: string) {
+  const oauth = source.authConfig.oauth!;
+  const url = source.config.kind === 'mcp_http' ? source.config.url : '';
+  return htmlPage(c, {
+    title: `Connect ${source.name}`,
+    status: error ? 400 : 200,
+    formAction: 'any',
+    body: `<h1>Connect ${escapeHtml(source.name)}</h1>
+<dl>
+<dt>MCP endpoint</dt><dd><code>${escapeHtml(url)}</code></dd>
+${oauth.scopes?.length ? `<dt>OAuth scopes</dt><dd>${escapeHtml(oauth.scopes.join(' '))}</dd>` : ''}
+<dt>Redirect URI</dt><dd><code>${escapeHtml(runtime.publicUrl + '/auth/oauth/callback')}</code></dd>
+</dl>
+<form method="post" action="/auth/connect/${encodeURIComponent(source.id)}" autocomplete="off">
+${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ''}
+<input type="hidden" name="ticket" value="${escapeHtml(ticket)}">
+${oauth.clientSecretName ? `<div class="field">
+<label for="client_secret">OAuth client secret</label>
+<input id="client_secret" name="client_secret" type="password" autocomplete="new-password" aria-describedby="client-secret-hint">
+<span id="client-secret-hint" class="hint">Leave empty if already saved in vault</span>
+</div>` : ''}
+<button class="primary" type="submit">Continue to OAuth sign-in</button>
+</form>`,
+  });
 }
 
 function asText(value: unknown): string {
@@ -296,6 +312,9 @@ export function mountAuthPages(app: Hono, runtime: GatewayRuntime): void {
           403,
         );
       }
+      if (result.source.authConfig.kind === 'oauth2' && result.source.authConfig.oauth) {
+        return oauthConnectPage(c, runtime, result.source, ticket);
+      }
       const fields = secretFieldNames(result.source);
       if (fields.length === 0) {
         return messagePage(
@@ -330,6 +349,18 @@ export function mountAuthPages(app: Hono, runtime: GatewayRuntime): void {
           403,
         );
       }
+      if (result.source.authConfig.kind === 'oauth2' && result.source.authConfig.oauth) {
+        const clientSecret = asText(form.client_secret);
+        if (clientSecret.length > MAX_SECRET_LENGTH) {
+          return oauthConnectPage(c, runtime, result.source, ticket, 'The OAuth client secret is too long.');
+        }
+        const { authorizeUrl } = await runtime.startUpstreamOAuth(sourceId, {
+          ticket, ...(clientSecret ? { clientSecret } : {}),
+        });
+        c.header('cache-control', 'no-store');
+        c.header('referrer-policy', 'no-referrer');
+        return c.redirect(safeRedirect(authorizeUrl), 303);
+      }
       const fields = secretFieldNames(result.source);
       const secrets: Record<string, string> = {};
       let problem: string | undefined;
@@ -350,6 +381,20 @@ export function mountAuthPages(app: Hono, runtime: GatewayRuntime): void {
       return htmlPage(c, {
         title: 'Connected',
         body: `<h1>Connected</h1><p>${escapeHtml(source.name)} now has its credentials. You can close this tab and retry in your agent.</p>`,
+      });
+    } catch (error) {
+      return failurePage(c, error);
+    }
+  });
+
+  app.get('/auth/oauth/callback', async (c) => {
+    try {
+      const { source, capabilityCount, refreshError } = await runtime.completeUpstreamOAuth(new URL(c.req.url).searchParams);
+      return htmlPage(c, {
+        title: 'Connected',
+        body: `<h1>Connected ${escapeHtml(source.name)}</h1>
+${refreshError ? `<p class="error" role="alert">${escapeHtml(refreshError)}</p>`
+    : `<p>${capabilityCount} ${capabilityCount === 1 ? 'capability' : 'capabilities'} discovered.</p>`}`,
       });
     } catch (error) {
       return failurePage(c, error);

@@ -533,3 +533,162 @@ it('honors manual, on-connect, and interval refresh policies independently', asy
   await runtime.refreshSource('manual');
   expect(discovers.get('manual')).toBe(2);
 });
+
+function modernUpstream(options: { onCall?: () => Promise<void>; failing?: (host: string) => boolean; discoverDelayMs?: number } = {}) {
+  const seen = { calls: 0, discovers: new Map<string, number>(), callHosts: [] as string[] };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const inbound = new Request(url, init);
+    const { hostname, pathname } = new URL(inbound.url);
+    if (options.failing?.(hostname)) return new Response(null, { status: 503 });
+    const { id, method } = await inbound.json();
+    if (id === undefined) return new Response(null, { status: 202 });
+    const key = hostname + pathname;
+    if (method === 'server/discover') {
+      seen.discovers.set(key, (seen.discovers.get(key) ?? 0) + 1);
+      if (options.discoverDelayMs) await new Promise(resolve => setTimeout(resolve, options.discoverDelayMs));
+    }
+    if (method === 'tools/call') {
+      seen.calls++;
+      seen.callHosts.push(hostname);
+      await options.onCall?.();
+    }
+    const results: Record<string, unknown> = {
+      'server/discover': { supportedVersions: ['2026-07-28'], capabilities: { tools: {} },
+        _meta: { 'io.modelcontextprotocol/serverInfo': { name: 'fixture', version: '1.0.0' } } },
+      'tools/list': { ttlMs: 0, cacheScope: 'private', tools: [{ name: 'slow', inputSchema: { type: 'object', properties: {} } }] },
+      'tools/call': { content: [{ type: 'text', text: 'done' }] },
+    };
+    return Response.json({ jsonrpc: '2.0', id, result: { resultType: 'complete', ...results[method] as object } });
+  });
+  return seen;
+}
+
+describe('queued upstream calls', () => {
+  it.each([
+    ['the client token is revoked', 'FORBIDDEN', async (runtime: GatewayRuntime, tokenId: string) => { await runtime.revokeToken(tokenId); }],
+    ['the profile starts denying the source', 'CAPABILITY_DENIED', async (runtime: GatewayRuntime) => {
+      await runtime.updateProfile('default', { rules: [{ id: 'deny-gated', sourceId: 'gated', permission: 'deny' }] });
+    }],
+    ['a safety policy starts denying the tool', 'CAPABILITY_DENIED', async (runtime: GatewayRuntime) => {
+      await runtime.createPolicy({ name: 'stop', capabilityPattern: 'slow', action: 'deny' });
+    }],
+    ['the source is disabled', 'UPSTREAM_UNAVAILABLE', async (runtime: GatewayRuntime) => {
+      await runtime.updateSource('gated', { enabled: false });
+    }],
+    ['the source is edited', 'UPSTREAM_UNAVAILABLE', async (runtime: GatewayRuntime) => {
+      await runtime.updateSource('gated', { name: 'renamed' });
+    }],
+  ])('fails closed without reaching the upstream when %s while waiting behind an in-flight call', async (_label, code, change) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const seen = modernUpstream({ onCall: () => gate });
+    const { runtime, token, record } = await start();
+    await runtime.createSource({ id: 'gated', name: 'gated', kind: 'mcp_http',
+      config: { kind: 'mcp_http', url: 'https://upstream.example/mcp', timeoutMs: 5000 } });
+    const first = rpc(runtime, token, 'tools/call', { name: 'slow' }, { id: 'first' });
+    await vi.waitFor(() => expect(seen.calls).toBe(1));
+    const queued = rpc(runtime, token, 'tools/call', { name: 'slow' }, { id: 'queued' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await change(runtime, record.id);
+    release();
+    await first;
+    expect((await queued).error?.data?.code).toBe(code);
+    expect(seen.calls).toBe(1);
+  });
+
+  it('still runs a queued call when nothing changed while it waited', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const seen = modernUpstream({ onCall: () => gate });
+    const { runtime, token } = await start();
+    await runtime.createSource({ id: 'gated', name: 'gated', kind: 'mcp_http',
+      config: { kind: 'mcp_http', url: 'https://upstream.example/mcp', timeoutMs: 5000 } });
+    const first = rpc(runtime, token, 'tools/call', { name: 'slow' }, { id: 'first' });
+    await vi.waitFor(() => expect(seen.calls).toBe(1));
+    const queued = rpc(runtime, token, 'tools/call', { name: 'slow' }, { id: 'queued' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release();
+    expect((await first).result.content[0].text).toBe('done');
+    expect((await queued).result.content[0].text).toBe('done');
+    expect(seen.calls).toBe(2);
+  });
+});
+
+it('drops discovered capabilities when a source is retargeted to an endpoint that fails discovery', async () => {
+  let broken = new Set<string>();
+  const seen = modernUpstream({ failing: host => broken.has(host) });
+  const { runtime, token } = await start();
+  await runtime.createSource({ id: 'moving', name: 'moving', kind: 'mcp_http',
+    config: { kind: 'mcp_http', url: 'https://first.example/mcp', timeoutMs: 1000 } });
+  expect((await runtime.listCapabilities({ sourceId: 'moving' })).map(cap => cap.exposedName)).toEqual(['slow']);
+  broken = new Set(['first.example']);
+  await runtime.updateSource('moving', { name: 'moving-renamed' });
+  expect((await runtime.listCapabilities({ sourceId: 'moving' })).map(cap => cap.exposedName)).toEqual(['slow']);
+  broken = new Set(['second.example']);
+  await runtime.updateSource('moving', { config: { kind: 'mcp_http', url: 'https://second.example/mcp', timeoutMs: 1000 } });
+  expect(await runtime.listCapabilities({ sourceId: 'moving' })).toEqual([]);
+  expect((await rpc(runtime, token, 'tools/call', { name: 'slow' })).error.data.code).toBe('CAPABILITY_NOT_FOUND');
+  expect(seen.callHosts).toEqual([]);
+});
+
+it('refreshes on_connect sources only for profiles that can reach them and coalesces concurrent connects per source', async () => {
+  const seen = modernUpstream({ discoverDelayMs: 30 });
+  const { runtime, token } = await start();
+  for (const id of ['open', 'blocked', 'gated']) {
+    await runtime.createSource({ id, name: id, kind: 'mcp_http', config: { kind: 'mcp_http', url: `https://upstream.example/${id}` },
+      refreshPolicy: { mode: 'on_connect' } });
+  }
+  await runtime.createProfile({ id: 'limited', name: 'limited', rules: [{ id: 'deny-blocked', sourceId: 'blocked', permission: 'deny' }] });
+  await runtime.createPolicy({ name: 'gate-limited', profileId: 'limited', sourceId: 'gated', capabilityPattern: '*', action: 'deny' });
+  const limited = (await runtime.createToken({ profileId: 'limited', label: 'limited' })).token;
+  const count = (id: string) => seen.discovers.get(`upstream.example/${id}`);
+  expect([count('open'), count('blocked'), count('gated')]).toEqual([1, 1, 1]);
+  await rpc(runtime, limited, 'server/discover', {}, { profile: 'limited' });
+  expect([count('open'), count('blocked'), count('gated')]).toEqual([2, 1, 1]);
+  await Promise.all([
+    rpc(runtime, token, 'server/discover', {}, { id: 'default' }),
+    rpc(runtime, limited, 'server/discover', {}, { profile: 'limited', id: 'limited' }),
+  ]);
+  expect([count('open'), count('blocked'), count('gated')]).toEqual([3, 2, 2]);
+});
+
+it('keeps an authorization code redeemable after a wrong verifier, redirect URI, or client tries it', async () => {
+  const { runtime } = await start();
+  const register = async (redirect: string) => (await (await runtime.handleOAuthRegister(new Request(publicUrl + '/oauth/register', {
+    method: 'POST', body: JSON.stringify({ client_name: 'client', redirect_uris: [redirect] }),
+  }))).json()).client_id as string;
+  const redirect = 'https://client.example/cb';
+  const clientId = await register(redirect);
+  const otherClient = await register(redirect);
+  const verifier = 'v'.repeat(43);
+  const { redirectUrl } = await runtime.approveOAuthAuthorize({ clientId, redirectUri: redirect, profileId: 'default', scope: 'mcp',
+    codeChallenge: createHash('sha256').update(verifier).digest('base64url') });
+  const code = new URL(redirectUrl).searchParams.get('code')!;
+  const exchange = (values: Record<string, string>) => runtime.handleOAuthToken(new Request(publicUrl + '/oauth/token', {
+    method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', client_id: clientId, code, code_verifier: verifier,
+      redirect_uri: redirect, ...values }),
+  }));
+  expect((await exchange({ code_verifier: 'w'.repeat(43) })).status).toBe(400);
+  expect((await exchange({ redirect_uri: 'https://client.example/other' })).status).toBe(400);
+  expect((await exchange({ client_id: otherClient })).status).toBe(400);
+  const redeemed = await exchange({});
+  expect(redeemed.status).toBe(200);
+  expect(await redeemed.json()).toMatchObject({ token_type: 'Bearer', access_token: expect.any(String) });
+  expect((await exchange({})).status).toBe(400);
+});
+
+it('binds auth handoff tickets to the source revision and rejects bad credentials before burning the ticket', async () => {
+  const { runtime } = await start();
+  const source = await runtime.createSource({ id: 'locked', name: 'locked', kind: 'mcp_http',
+    config: { kind: 'mcp_http', url: 'https://fixture.invalid/mcp' }, authConfig: { kind: 'bearer_secret', secretName: 'locked-key' } });
+  expect(source.health).toBe('auth_required');
+  const ticket = new URL((await runtime.testSource('locked')).authHandoff!.authUrl).searchParams.get('ticket')!;
+  await expect(runtime.completeAuthHandoff('locked', ticket, {})).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  await expect(runtime.completeAuthHandoff('locked', ticket, { 'locked-key': 'x'.repeat(16 * 1024 + 1) }))
+    .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  expect(await runtime.validateAuthTicket('locked', ticket)).toMatchObject({ valid: true });
+  await runtime.updateSource('locked', { name: 'locked-renamed' });
+  expect(await runtime.validateAuthTicket('locked', ticket)).toMatchObject({ valid: false });
+  await expect(runtime.completeAuthHandoff('locked', ticket, { 'locked-key': 'fresh' })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  expect(await runtime.listSecrets()).toEqual([]);
+});

@@ -9,7 +9,6 @@ export interface ConnectSnippet {
   description: string;
   auth: 'oauth' | 'bearer';
   language: 'text' | 'bash' | 'json' | 'toml';
-  /** Where the operator pastes this. The gateway never writes it for them. */
   target: string;
   content: string;
 }

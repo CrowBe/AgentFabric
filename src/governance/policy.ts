@@ -5,7 +5,6 @@ const rank = { allow: 0, require_approval: 1, deny: 2 } as const;
 const reservedTools = new Set(['fabric_search', 'fabric_inspect', 'fabric_call', 'fabric_propose_capability']);
 
 function glob(pattern: string, value: string) {
-  // Bounded wildcard matching without interpreting the operator's pattern as regex.
   let p = 0;
   let v = 0;
   let star = -1;
@@ -98,3 +97,11 @@ export async function effectiveCatalog(storage: T.StorageAdapter, profile: T.Pro
 }
 
 export function visibleCapability(cap: T.EffectiveCapability) { return cap.exposure !== 'hidden' && cap.permission !== 'deny'; }
+
+export function sourceDenied(profile: T.ProfileRecord, policies: T.SafetyPolicyRule[], sourceId: string) {
+  const everyCapability = (pattern?: string) => pattern === undefined || /^\*+$/.test(pattern);
+  return profile.rules.some(rule => rule.permission === 'deny' && (rule.sourceId === undefined || rule.sourceId === sourceId)
+      && rule.capabilityId === undefined && rule.kind === undefined && rule.group === undefined && everyCapability(rule.capabilityPattern))
+    || policies.some(policy => policy.enabled && policy.action === 'deny' && (!policy.profileId || policy.profileId === profile.id)
+      && (!policy.sourceId || policy.sourceId === sourceId) && everyCapability(policy.capabilityPattern));
+}

@@ -19,6 +19,8 @@ import type {
   SourceRecord,
   TelemetryEventRecord,
   TelemetrySummary,
+  UpstreamOAuthStateRecord,
+  UpstreamOAuthTokenRecord,
 } from './domain.js';
 
 export interface StoredClientToken extends ClientTokenRecord {
@@ -32,6 +34,13 @@ export interface TelemetryEventFilter {
   limit?: number;
 }
 
+export interface EventOccurrenceFilter {
+  name?: string;
+  afterCursor?: string;
+  limit?: number;
+  order?: 'asc' | 'desc';
+}
+
 export interface TraceStore {
   append(event: TelemetryEventRecord): Promise<void>;
   query(filter?: TelemetryEventFilter): Promise<TelemetryEventRecord[]>;
@@ -40,14 +49,12 @@ export interface TraceStore {
 }
 
 export interface StorageAdapter {
-  // Sources
   listSources(): Promise<SourceRecord[]>;
   getSource(id: string): Promise<SourceRecord | null>;
   getSourceByName(name: string): Promise<SourceRecord | null>;
   upsertSource(source: SourceRecord): Promise<void>;
   deleteSource(id: string): Promise<void>;
 
-  // Capabilities
   listCapabilities(sourceId?: string): Promise<CapabilityRecord[]>;
   getCapability(id: string): Promise<CapabilityRecord | null>;
   replaceSourceCapabilities(
@@ -55,53 +62,46 @@ export interface StorageAdapter {
     capabilities: CapabilityRecord[],
   ): Promise<void>;
 
-  // Overlays
   listOverlays(): Promise<NormalizationOverlay[]>;
   getOverlay(capabilityId: string): Promise<NormalizationOverlay | null>;
   upsertOverlay(overlay: NormalizationOverlay): Promise<void>;
   deleteOverlay(capabilityId: string): Promise<void>;
 
-  // Profiles
   listProfiles(): Promise<ProfileRecord[]>;
   getProfile(idOrName: string): Promise<ProfileRecord | null>;
   upsertProfile(profile: ProfileRecord): Promise<void>;
   deleteProfile(id: string): Promise<void>;
 
-  // Safety Policies
   listPolicies(): Promise<SafetyPolicyRule[]>;
   getPolicy(id: string): Promise<SafetyPolicyRule | null>;
   upsertPolicy(policy: SafetyPolicyRule): Promise<void>;
   deletePolicy(id: string): Promise<void>;
 
-  // Approvals
   listApprovals(status?: ApprovalStatus): Promise<ApprovalRequestRecord[]>;
   getApproval(id: string): Promise<ApprovalRequestRecord | null>;
   upsertApproval(approval: ApprovalRequestRecord): Promise<void>;
 
-  // Proposals
   listProposals(status?: ProposalStatus): Promise<CapabilityProposalRecord[]>;
   getProposal(id: string): Promise<CapabilityProposalRecord | null>;
   upsertProposal(proposal: CapabilityProposalRecord): Promise<void>;
 
-  // Telemetry
   appendTelemetryEvent(event: TelemetryEventRecord): Promise<void>;
   listTelemetryEvents(
     filter?: TelemetryEventFilter,
   ): Promise<TelemetryEventRecord[]>;
 
-  // Client Bearer Tokens (hashes only)
   listClientTokens(): Promise<ClientTokenRecord[]>;
   getClientTokenByHash(tokenHash: string): Promise<StoredClientToken | null>;
   upsertClientToken(token: StoredClientToken): Promise<void>;
   markClientTokenUsed(id: string, timestamp: string): Promise<void>;
   revokeClientToken(id: string, revokedAt: string): Promise<void>;
 
-  // OAuth 2.1 Clients, Codes & Refresh Tokens
   listOAuthClients(): Promise<OAuthClientRecord[]>;
   getOAuthClient(clientId: string): Promise<OAuthClientRecord | null>;
   upsertOAuthClient(client: OAuthClientRecord): Promise<void>;
   deleteOAuthClient(clientId: string): Promise<void>;
   saveOAuthCode(record: OAuthAuthorizationCodeRecord): Promise<void>;
+  getOAuthCode(codeHash: string): Promise<OAuthAuthorizationCodeRecord | null>;
   consumeOAuthCode(codeHash: string): Promise<OAuthAuthorizationCodeRecord | null>;
   saveOAuthRefreshToken(record: OAuthRefreshTokenRecord): Promise<void>;
   getOAuthRefreshTokenByHash(
@@ -112,8 +112,18 @@ export interface StorageAdapter {
     clientId: string,
     revokedAt: string,
   ): Promise<void>;
+  revokeOAuthRefreshTokensByProfile(
+    profileId: string,
+    revokedAt: string,
+  ): Promise<void>;
 
-  // Interactive Auth Handoff Tickets
+  saveUpstreamOAuthState(record: UpstreamOAuthStateRecord): Promise<void>;
+  consumeUpstreamOAuthState(stateHash: string): Promise<UpstreamOAuthStateRecord | null>;
+  deleteUpstreamOAuthStatesBySource(sourceId: string): Promise<void>;
+  getUpstreamOAuthToken(sourceId: string): Promise<UpstreamOAuthTokenRecord | null>;
+  upsertUpstreamOAuthToken(record: UpstreamOAuthTokenRecord): Promise<void>;
+  deleteUpstreamOAuthToken(sourceId: string): Promise<void>;
+
   saveAuthTicket(record: AuthTicketRecord): Promise<void>;
   getAuthTicket(
     sourceId: string,
@@ -124,16 +134,11 @@ export interface StorageAdapter {
     ticketHash: string,
   ): Promise<AuthTicketRecord | null>;
 
-  // MCP Events (io.modelcontextprotocol/events / SEP-3415)
   listEventTypes(): Promise<McpEventTypeRecord[]>;
   upsertEventType(eventType: McpEventTypeRecord): Promise<void>;
   deleteEventTypesBySource(sourceId: string): Promise<void>;
   appendEventOccurrence(occurrence: McpEventOccurrence): Promise<void>;
-  listEventOccurrences(filter?: {
-    name?: string;
-    afterCursor?: string;
-    limit?: number;
-  }): Promise<McpEventOccurrence[]>;
+  listEventOccurrences(filter?: EventOccurrenceFilter): Promise<McpEventOccurrence[]>;
   listEventSubscriptions(
     profileId?: string,
   ): Promise<McpEventSubscriptionRecord[]>;

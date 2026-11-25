@@ -28,6 +28,7 @@ import type {
   TelemetrySummary,
   UpdateProfileInput,
   UpdateSourceInput,
+  UpstreamOAuthStatus,
 } from '../../src/types/index.js';
 
 export type {
@@ -49,11 +50,11 @@ export type {
   SourceRecord,
   TelemetryEventRecord,
   TelemetrySummary,
+  UpstreamOAuthStatus,
 };
 
 const TOKEN_KEY = 'agentfabric.operatorToken';
 
-/** The operator token lives in sessionStorage only: it dies with the tab. */
 export function getToken(): string | null {
   try {
     return sessionStorage.getItem(TOKEN_KEY);
@@ -68,7 +69,6 @@ export function setToken(token: string): void {
   try {
     sessionStorage.setItem(TOKEN_KEY, token);
   } catch {
-    // sessionStorage can be unavailable (private windows); keep it in memory.
   }
 }
 
@@ -77,7 +77,6 @@ export function clearToken(): void {
   try {
     sessionStorage.removeItem(TOKEN_KEY);
   } catch {
-    // Nothing stored.
   }
 }
 
@@ -104,6 +103,8 @@ function authHeaders(): Record<string, string> {
   return token ? { authorization: `Bearer ${token}` } : {};
 }
 
+const signsOutOperator = (error: ApiError): boolean => error.code === 'UNAUTHORIZED' || error.code === 'ERROR';
+
 async function toApiError(response: Response): Promise<ApiError> {
   let code = 'ERROR';
   let message = `Request failed (${response.status})`;
@@ -116,7 +117,6 @@ async function toApiError(response: Response): Promise<ApiError> {
     message = body.error?.message ?? message;
     details = body.error?.details;
   } catch {
-    // Non-JSON error body.
   }
   return new ApiError(message, response.status, code, details);
 }
@@ -139,13 +139,12 @@ export async function request<T>(
   });
   if (!response.ok) {
     const error = await toApiError(response);
-    if (response.status === 401) for (const listener of unauthorizedListeners) listener();
+    if (response.status === 401 && signsOutOperator(error)) for (const listener of unauthorizedListeners) listener();
     throw error;
   }
   return (await response.json()) as T;
 }
 
-/** Human-readable message, including field-level validation issues. */
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     const issues = (error.details as { issues?: Array<{ path: string; message: string }> } | undefined)
@@ -224,6 +223,11 @@ export const api = {
   refreshSource: (id: string) =>
     request<{ source: SourceRecord }>('POST', `/api/sources/${enc(id)}/refresh`),
   testSource: (id: string) => request<SourceTestResult>('POST', `/api/sources/${enc(id)}/test`),
+  sourceOAuthStatus: (id: string) =>
+    request<{ oauth: UpstreamOAuthStatus }>('GET', `/api/sources/${enc(id)}/oauth`).then((r) => r.oauth),
+  startSourceOAuth: (id: string) =>
+    request<{ authorizeUrl: string; redirectUri: string }>('POST', `/api/sources/${enc(id)}/oauth/start`),
+  disconnectSourceOAuth: (id: string) => request<{ ok: true }>('DELETE', `/api/sources/${enc(id)}/oauth`),
 
   recipes: () => request<{ recipes: RecipeInfo[] }>('GET', '/api/recipes').then((r) => r.recipes),
   instantiateRecipe: (id: string, values: Record<string, unknown>) =>
@@ -234,6 +238,11 @@ export const api = {
   capabilities: (filter: { profileId?: string; sourceId?: string; kind?: CapabilityKind; query?: string } = {}) =>
     request<{ capabilities: EffectiveCapability[] }>('GET', `/api/capabilities${qs(filter)}`).then(
       (r) => r.capabilities,
+    ),
+  capabilityContent: (id: string) =>
+    request<{ uri: string; mimeType: string; content: string; files?: Record<string, string> }>(
+      'GET',
+      `/api/capabilities/${enc(id)}/content`,
     ),
   draftOverlay: (id: string, guidance?: string) =>
     request<{ overlay: NormalizationOverlay }>(
@@ -319,7 +328,9 @@ export const api = {
     ),
   deleteEventSubscription: (id: string) =>
     request<{ ok: true }>('DELETE', `/api/events/subscriptions/${enc(id)}`),
-  eventOccurrences: (filter: { name?: string; afterCursor?: string; limit?: number } = {}) =>
+  eventOccurrences: (
+    filter: { name?: string; afterCursor?: string; limit?: number; order?: 'asc' | 'desc' } = {},
+  ) =>
     request<{ occurrences: McpEventOccurrence[] }>('GET', `/api/events/occurrences${qs(filter)}`).then(
       (r) => r.occurrences,
     ),
@@ -345,10 +356,6 @@ export const api = {
     }>('POST', '/api/config/import', { bundle, merge }),
 };
 
-/**
- * Subscribe to the live approvals stream. Uses fetch streaming so the operator token
- * travels in a header instead of the URL. Reconnects with backoff until `signal` aborts.
- */
 export async function streamApprovals(
   handlers: {
     onSnapshot(approvals: ApprovalRequestRecord[]): void;
@@ -395,7 +402,6 @@ export async function streamApprovals(
               handlers.onSnapshot((parsed as { approvals: ApprovalRequestRecord[] }).approvals);
             } else if (event === 'approval') handlers.onEvent(parsed as ApprovalEvent);
           } catch {
-            // Ignore malformed frames.
           }
         }
       }

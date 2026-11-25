@@ -28,9 +28,10 @@ import type {
   TelemetrySummary,
   UpdateProfileInput,
   UpdateSourceInput,
+  UpstreamOAuthStatus,
 } from './domain.js';
 import type { AuthHandoffInfo } from './errors.js';
-import type { SecretStore, StorageAdapter, TraceStore } from './storage.js';
+import type { EventOccurrenceFilter, SecretStore, StorageAdapter, TraceStore } from './storage.js';
 
 export interface LlmAssistConfig {
   apiUrl?: string;
@@ -50,6 +51,8 @@ export interface RuntimeOptions {
   traceStore?: TraceStore;
   secrets?: SecretStore;
   llm?: LlmAssistConfig;
+  oauthFetch?: typeof fetch;
+  allowInsecureLocalOAuth?: boolean;
 }
 
 export interface OAuthAuthorizeValidationSuccess {
@@ -83,7 +86,6 @@ export interface GatewayRuntime {
   readonly homeDir: string;
   readonly operatorToken: string;
 
-  // Web Standard MCP & OAuth handlers
   handleMcpRequest(req: Request, profileName: string | null): Promise<Response>;
   handleOAuthProtectedResourceMetadata(req: Request): Promise<Response>;
   handleOAuthAuthorizationServerMetadata(req: Request): Promise<Response>;
@@ -101,7 +103,6 @@ export interface GatewayRuntime {
     state?: string;
   }): Promise<{ redirectUrl: string }>;
 
-  // Auth handoff & operator auth
   authenticateOperator(req: Request): boolean;
   validateAuthTicket(
     sourceId: string,
@@ -113,7 +114,11 @@ export interface GatewayRuntime {
     secrets: Record<string, string>,
   ): Promise<{ source: SourceRecord }>;
 
-  // Sources, Capabilities & Overlays
+  getUpstreamOAuthStatus(sourceId: string): Promise<UpstreamOAuthStatus>;
+  startUpstreamOAuth(sourceId: string, options?: { ticket?: string; clientSecret?: string }): Promise<{ authorizeUrl: string; redirectUri: string }>;
+  completeUpstreamOAuth(params: URLSearchParams): Promise<{ source: SourceRecord; capabilityCount: number; refreshError?: string }>;
+  disconnectUpstreamOAuth(sourceId: string): Promise<void>;
+
   listSources(): Promise<SourceRecord[]>;
   getSource(id: string): Promise<SourceRecord | null>;
   createSource(input: CreateSourceInput): Promise<SourceRecord>;
@@ -136,6 +141,12 @@ export interface GatewayRuntime {
     kind?: CapabilityKind;
     query?: string;
   }): Promise<EffectiveCapability[]>;
+  getCapabilityContent(capabilityId: string): Promise<{
+    uri: string;
+    mimeType: string;
+    content: string;
+    files?: Record<string, string>;
+  }>;
   draftOverlay(
     capabilityId: string,
     guidance?: string,
@@ -149,14 +160,12 @@ export interface GatewayRuntime {
   ): Promise<NormalizationOverlay>;
   deleteOverlay(capabilityId: string): Promise<void>;
 
-  // Profiles
   listProfiles(): Promise<ProfileRecord[]>;
   getProfile(idOrName: string): Promise<ProfileRecord | null>;
   createProfile(input: CreateProfileInput): Promise<ProfileRecord>;
   updateProfile(id: string, patch: UpdateProfileInput): Promise<ProfileRecord>;
   deleteProfile(id: string): Promise<void>;
 
-  // Tokens, OAuth Clients & Secrets
   listTokens(): Promise<ClientTokenRecord[]>;
   createToken(input: {
     label: string;
@@ -174,7 +183,6 @@ export interface GatewayRuntime {
   ): Promise<SecretMetadata>;
   deleteSecret(name: string): Promise<void>;
 
-  // Safety Policies, Approvals & Proposals
   listPolicies(): Promise<SafetyPolicyRule[]>;
   createPolicy(input: CreatePolicyInput): Promise<SafetyPolicyRule>;
   deletePolicy(id: string): Promise<void>;
@@ -200,16 +208,13 @@ export interface GatewayRuntime {
     note?: string,
   ): Promise<CapabilityProposalRecord>;
 
-  // MCP Events (io.modelcontextprotocol/events / SEP-3415)
   listEventTypes(profileId?: string): Promise<McpEventTypeRecord[]>;
   listEventSubscriptions(
     profileId?: string,
   ): Promise<McpEventSubscriptionRecord[]>;
-  listEventOccurrences(filter?: {
-    name?: string;
-    afterCursor?: string;
-    limit?: number;
-  }): Promise<McpEventOccurrence[]>;
+  listEventOccurrences(
+    filter?: EventOccurrenceFilter,
+  ): Promise<McpEventOccurrence[]>;
   emitEvent(input: {
     name: string;
     sourceId?: string;
@@ -217,7 +222,6 @@ export interface GatewayRuntime {
   }): Promise<McpEventOccurrence>;
   deleteEventSubscription(id: string): Promise<void>;
 
-  // Telemetry, Portability & Lifecycle
   getTelemetrySummary(filter?: {
     profileId?: string;
     sourceId?: string;
