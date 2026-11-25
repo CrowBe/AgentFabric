@@ -108,7 +108,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     const upstreamOAuth = createUpstreamOAuth({ storage, secrets, publicUrl, fetchImpl: options.oauthFetch,
       allowInsecureLocalOAuth: options.allowInsecureLocalOAuth });
     const upstreams = new UpstreamManager(storage, secrets, mode, homeDir, event => eventService.emit(event), handoffs.issue, upstreamOAuth);
-    const eventService = new Events(storage, secrets, upstreams);
+    const eventService = new Events(storage, secrets, upstreams, publicUrl);
     const approvals = new Approvals(storage, secrets, publicUrl, approvalTimeout, (name, approval) => eventService.emit({
       name, sourceId: approval.sourceId,
       data: { id: approval.id, profileId: approval.profileId, capabilityId: approval.capabilityId,
@@ -274,6 +274,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
       mode, homeDir, publicUrl, operatorToken,
       ...oauth,
       handleMcpRequest: (request, profileName) => transport.handle(request, profileName),
+      handleEventIngress: (request, subscriptionId) => eventService.ingest(subscriptionId, request),
       authenticateOperator: request => authenticateOperator(request, operatorToken),
       validateAuthTicket: handoffs.validate,
       async completeAuthHandoff(id, ticket, credentials) {

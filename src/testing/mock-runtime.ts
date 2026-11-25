@@ -241,6 +241,10 @@ export function createMockRuntime(
     homeDir,
     operatorToken,
 
+    async handleEventIngress() {
+      return new Response(null, { status: 404 });
+    },
+
     async handleMcpRequest(req, profileName) {
       const auth = req.headers.get('authorization');
       if (!auth || !auth.startsWith('Bearer ')) {

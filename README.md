@@ -60,6 +60,7 @@ Upstream OAuth 2.0/2.1: for an `mcp_http` source that needs OAuth, register `<pu
 - MCP `2026-07-28` plus legacy `2025-11-25`, `2025-06-18`, and `2025-03-26`.
 - Upstream elicitation passes through lazily over SSE in `form` and `url` modes for elicitation-capable legacy sessions.
 - Events (`io.modelcontextprotocol/events`): polling, an SSE stream, and webhooks, plus proxied upstream poll and push.
+- Webhook-only upstream events are relayed to webhook subscribers. For each subscription the gateway subscribes upstream with its own ingress URL (`<publicUrl>/events/ingress/<subscription>`) and a vault-held signing key. The ingress verifies the Standard Webhooks signature and timestamp, rechecks profile, token, and policy authority on every delivery, then re-signs the event for the subscriber. It returns `2xx` to the upstream only after the subscriber acknowledges, so upstream retries stay at-least-once. These events are advertised only when `AGENTFABRIC_PUBLIC_URL` is HTTPS, for example behind Tailscale Funnel.
 - Export is a secret-free config bundle. Import `merge` overwrites matching IDs (`--replace` replaces everything), and executable sources (`mcp_stdio`, `cli_wrapper`) import disabled unless you opt in explicitly.
 
 ## Architecture

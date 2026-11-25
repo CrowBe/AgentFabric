@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { BlockList } from 'node:net';
@@ -44,6 +44,13 @@ const unsubscribeParams = z.strictObject({
 });
 
 type Subscription = T.McpEventSubscriptionRecord & { principal: string; sourceId: string };
+const relayedEvent = z.object({
+  eventId: z.string().min(1).max(256), name: z.string().min(1), timestamp: z.iso.datetime({ offset: true }),
+  data: dataSchema, cursor: z.string().max(2048).nullable().optional(),
+});
+const relayControl = z.object({ type: z.enum(['verification', 'terminated']), challenge: z.string().max(512).optional() });
+const maxRelayBytes = 256 * 1024;
+const signatureToleranceSeconds = 300;
 type PublicEvent = Omit<T.McpEventOccurrence, 'sourceId' | 'cursor'> & { cursor: string | null };
 type PollPage = { events: PublicEvent[]; cursor: string | null; hasMore: boolean; truncated: boolean; nextPollMs: number };
 type StreamSend = (message: Record<string, unknown>, cursor?: string) => boolean;
@@ -98,6 +105,20 @@ globalIpv6.addSubnet('2000::', 3, 'ipv6');
 export function publicWebhookAddress(address: string, family: number) {
   return family === 6 ? globalIpv6.check(address, 'ipv6') && !privateAddresses.check(address, 'ipv6')
     : family === 4 && !privateAddresses.check(address);
+}
+
+function signedBy(key: Buffer, headers: Headers, body: string) {
+  const messageId = headers.get('webhook-id'), timestamp = headers.get('webhook-timestamp');
+  const signatures = headers.get('webhook-signature');
+  if (!messageId || messageId.length > 256 || !timestamp || !/^\d{1,12}$/.test(timestamp) || !signatures) return undefined;
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > signatureToleranceSeconds) return undefined;
+  const expected = createHmac('sha256', key).update(`${messageId}.${timestamp}.${body}`).digest();
+  const valid = signatures.split(' ').some(entry => {
+    if (!entry.startsWith('v1,')) return false;
+    const candidate = Buffer.from(entry.slice(3), 'base64');
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+  });
+  return valid ? messageId : undefined;
 }
 
 function signingKey(secret: string | undefined) {
@@ -164,7 +185,8 @@ export class Events {
   private closed = false;
 
   constructor(private readonly storage: T.StorageAdapter, private readonly secrets: T.SecretStore,
-    private readonly upstream: Pick<UpstreamManager, 'pollEvent' | 'streamEvent'>) {
+    private readonly upstream: Pick<UpstreamManager, 'pollEvent' | 'streamEvent' | 'subscribeEvent' | 'unsubscribeEvent'>,
+    private readonly publicUrl?: string) {
     this.timer = setInterval(() => { void this.drainWebhooks().catch(() => {}); }, 2000);
     this.timer.unref();
   }
@@ -191,6 +213,13 @@ export class Events {
     return !!token && !token.revokedAt && token.profileId === identity.profile.id && token.scopes.includes('mcp');
   }
 
+  private get relayAvailable() { return this.publicUrl?.startsWith('https://') ?? false; }
+
+  private exposedModes(type: T.McpEventTypeRecord) {
+    if (type.sourceId === 'gateway') return type.supportedModes;
+    return type.supportedModes.filter(mode => mode === 'poll' || mode === 'push' || (mode === 'webhook' && this.relayAvailable));
+  }
+
   async listTypes(profileId?: string) {
     if (!profileId) return this.storage.listEventTypes();
     return (await this.profileTypes(profileId)).map(({ originalName: _name, ...type }) => type);
@@ -206,8 +235,7 @@ export class Events {
     const visible = types.filter(type => {
       const source = byId.get(type.sourceId);
       const gateway = type.sourceId === 'gateway';
-      if (!gateway && (!source?.enabled || source.health !== 'healthy'
-        || !type.supportedModes.some(mode => mode === 'poll' || mode === 'push'))) return false;
+      if (!gateway && (!source?.enabled || source.health !== 'healthy' || !this.exposedModes(type).length)) return false;
       const access = effectivePermissions(profile, policies, { id: type.name, originalName: type.name, exposedName: type.name,
         sourceId: type.sourceId, semanticGroup: source?.name ?? 'gateway' });
       return access.permission === 'allow' && access.exposure !== 'hidden';
@@ -224,8 +252,7 @@ export class Events {
       }
       used.add(name);
       return {
-        ...type, name, originalName: type.name,
-        supportedModes: type.sourceId === 'gateway' ? type.supportedModes : type.supportedModes.filter(mode => mode === 'poll' || mode === 'push'),
+        ...type, name, originalName: type.name, supportedModes: this.exposedModes(type),
       };
     });
   }
@@ -480,16 +507,42 @@ export class Events {
       const initial = live ? { cursor: existing.cursor ?? String(this.head), truncated: false }
         : this.initial(request.cursor, request.maxAgeMs);
       const secretName = uri ? `webhook:${id}:${randomUUID()}` : undefined;
+      const reusable = existing?.relay?.upstreamName === type.originalName ? existing.relay : undefined;
+      const relay: T.McpEventRelay | undefined = uri && type.sourceId !== 'gateway' ? reusable ?? {
+        upstreamName: type.originalName, ingressUrl: `${this.publicUrl}/events/ingress/${id}`, secretName: `relay:${id}:${randomUUID()}`,
+      } : undefined;
       const record: Subscription = {
         id, profileId: identity.profile.id, principal: identity.principal, sourceId: type.sourceId, name: request.name,
         arguments: request.arguments, mode, callbackUrl: uri?.href, secretName, cursor: initial.cursor,
         ttlMs, expiresAt, refreshBefore: expiresAt, createdAt: live ? existing.createdAt : new Date(now).toISOString(),
+        ...(relay ? { relay } : {}),
       };
+      const created = [secretName, relay && relay !== reusable ? relay.secretName : undefined].filter(name => name !== undefined);
+      const discard = () => Promise.all(created.map(name => this.secrets.delete(name).catch(() => {})));
       if (secretName) await this.secrets.set(secretName, rawSecret!);
+      if (relay && relay !== reusable) await this.secrets.set(relay.secretName, 'whsec_' + randomBytes(32).toString('base64'));
       try { await this.storage.upsertEventSubscription(record); }
-      catch (error) { if (secretName) await this.secrets.delete(secretName).catch(() => {}); throw error; }
+      catch (error) { await discard(); throw error; }
+      if (relay) {
+        try {
+          const upstream = await this.upstream.subscribeEvent({ ...type, name: relay.upstreamName }, {
+            name: relay.upstreamName, arguments: request.arguments, ttlMs,
+            delivery: { mode: 'webhook', url: relay.ingressUrl, secret: await this.secrets.get(relay.secretName) },
+          });
+          relay.upstreamId = upstream.id;
+          if (upstream.refreshBefore && Date.parse(upstream.refreshBefore) < Date.parse(record.expiresAt)) {
+            record.refreshBefore = upstream.refreshBefore;
+          }
+          await this.storage.upsertEventSubscription(record);
+        } catch (error) {
+          if (existing) await this.storage.upsertEventSubscription(existing);
+          else await this.storage.deleteEventSubscription(id);
+          await discard();
+          throw error;
+        }
+      }
       if (existing?.secretName) await this.secrets.delete(existing.secretName).catch(() => {});
-      return { ...complete, id, subscriptionId: id, refreshBefore: expiresAt, expiresAt, ...initial };
+      return { ...complete, id, subscriptionId: id, refreshBefore: record.refreshBefore, expiresAt, ...initial };
     });
     if (uri) void this.drainWebhooks().catch(() => {});
     return subscription;
@@ -515,6 +568,69 @@ export class Events {
     if (record.secretName) await this.secrets.delete(record.secretName);
     this.retryAt.delete(record.id);
     this.messages.delete(record.id);
+    const { relay } = record;
+    if (!relay) return;
+    await this.secrets.delete(relay.secretName).catch(() => {});
+    if (relay.upstreamId) await this.upstream.unsubscribeEvent({ sourceId: (record as Subscription).sourceId }, {
+      name: relay.upstreamName, arguments: record.arguments, delivery: { mode: 'webhook', url: relay.ingressUrl },
+    }).catch(() => {});
+  }
+
+  private async relayTarget(record: Subscription) {
+    if (Date.parse(record.expiresAt) <= Date.now()) return undefined;
+    const profile = await this.storage.getProfile(record.profileId);
+    if (!profile || profile.id !== record.profileId || !(await this.identityActive({ profile, principal: record.principal }))) return undefined;
+    const type = await this.target(record.profileId, record.name, record.arguments, 'webhook').catch(() => undefined);
+    return type && type.sourceId === record.sourceId && type.originalName === record.relay?.upstreamName ? type : undefined;
+  }
+
+  async ingest(id: string, request: Request): Promise<Response> {
+    const status = (code: number) => new Response(null, { status: code });
+    const record = await this.storage.getEventSubscription(id) as Subscription | null;
+    const relay = record?.relay;
+    if (!record || !relay || !record.callbackUrl || !record.secretName) return status(404);
+    const body = await request.text();
+    if (Buffer.byteLength(body) > maxRelayBytes) return status(413);
+    const secret = await this.secrets.get(relay.secretName);
+    const messageId = secret ? signedBy(signingKey(secret), request.headers, body) : undefined;
+    if (!messageId) return status(401);
+    const upstreamId = request.headers.get('x-mcp-subscription-id');
+    if (relay.upstreamId && upstreamId !== relay.upstreamId) return status(401);
+    let message: unknown;
+    try { message = JSON.parse(body); } catch { return status(400); }
+    const control = relayControl.safeParse(message);
+    if (control.success && control.data.type === 'verification') {
+      return control.data.challenge ? Response.json({ challenge: control.data.challenge }) : status(400);
+    }
+    if (control.success) {
+      await this.serial(id, async () => {
+        const current = await this.storage.getEventSubscription(id) as Subscription | null;
+        if (current?.relay?.secretName !== relay.secretName) return;
+        await this.notifyTerminated(current, { code: -32603, message: 'Upstream subscription ended' });
+        await this.remove(current);
+      });
+      return status(200);
+    }
+    const event = relayedEvent.safeParse(message);
+    if (!event.success || event.data.name !== relay.upstreamName) return status(400);
+    const type = await this.relayTarget(record);
+    if (!type) return status(410);
+    try { validateArguments(type.payloadSchema, event.data.data); } catch { return status(400); }
+    const { eventId, timestamp, data } = event.data;
+    try {
+      const key = signingKey(await this.secrets.get(record.secretName) ?? undefined);
+      const response = await deliver(callback(record.callbackUrl), record.id, key, messageId,
+        this.secrets.redactValue({ eventId, name: type.name, timestamp, data, cursor: null }));
+      return status(response.status >= 200 && response.status < 300 ? 200 : 502);
+    } catch { return status(502); }
+  }
+
+  private async notifyTerminated(record: T.McpEventSubscriptionRecord, error: { code: number; message: string }) {
+    if (!record.callbackUrl || !record.secretName) return;
+    try {
+      const key = signingKey(await this.secrets.get(record.secretName) ?? undefined);
+      await deliver(callback(record.callbackUrl), record.id, key, 'msg_terminated_' + randomUUID(), { type: 'terminated', error });
+    } catch {}
   }
 
   delete(id: string) {
@@ -555,14 +671,11 @@ export class Events {
           }
         }
         if (termination) {
-          try {
-            const key = signingKey(await this.secrets.get(current.secretName) ?? undefined);
-            await deliver(callback(current.callbackUrl), current.id, key, 'msg_terminated_' + randomUUID(),
-              { type: 'terminated', error: termination });
-          } catch {}
+          await this.notifyTerminated(current, termination);
           await this.remove(current);
           return;
         }
+        if (current.relay) return;
         const currentCursor = current.cursor ?? String(this.head);
         const page = await this.page(current.profileId, current.name, currentCursor, 1);
         const event = page.events[0];

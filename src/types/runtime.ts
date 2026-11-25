@@ -87,6 +87,7 @@ export interface GatewayRuntime {
   readonly operatorToken: string;
 
   handleMcpRequest(req: Request, profileName: string | null): Promise<Response>;
+  handleEventIngress(req: Request, subscriptionId: string): Promise<Response>;
   handleOAuthProtectedResourceMetadata(req: Request): Promise<Response>;
   handleOAuthAuthorizationServerMetadata(req: Request): Promise<Response>;
   handleOAuthRegister(req: Request): Promise<Response>;

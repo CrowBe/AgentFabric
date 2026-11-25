@@ -14,7 +14,7 @@ export interface CreateAppOptions {
   staticDir?: string | false;
 }
 
-const API_PREFIXES = ['/api', '/mcp', '/oauth', '/.well-known', '/healthz'];
+const API_PREFIXES = ['/api', '/mcp', '/oauth', '/.well-known', '/healthz', '/events'];
 
 function wantsJson(path: string): boolean {
   return API_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
@@ -83,6 +83,7 @@ export function createApp(
   app.use('/oauth/*', rejectOversized(64 * 1024));
   app.use('/mcp', rejectOversized(2 * 1024 * 1024));
   app.use('/mcp/*', rejectOversized(2 * 1024 * 1024));
+  app.use('/events/ingress/*', rejectOversized(256 * 1024));
 
   app.post('/oauth/register', (c) => runtime.handleOAuthRegister(c.req.raw));
   app.post('/oauth/token', (c) => runtime.handleOAuthToken(c.req.raw));
@@ -91,6 +92,10 @@ export function createApp(
   app.all('/mcp', (c) => runtime.handleMcpRequest(c.req.raw, null));
   app.all('/mcp/:profile', (c) =>
     runtime.handleMcpRequest(c.req.raw, c.req.param('profile')),
+  );
+
+  app.post('/events/ingress/:subscription', (c) =>
+    runtime.handleEventIngress(c.req.raw, c.req.param('subscription')),
   );
 
   app.use('/api/*', createOperatorGuard(runtime));
