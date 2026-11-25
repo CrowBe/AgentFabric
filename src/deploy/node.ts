@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createGatewayRuntime } from '../runtime/index.js';
 import { createApp } from '../server/app.js';
+import { createIngressApp } from '../server/ingress.js';
 import type {
   GatewayMode,
   GatewayRuntime,
@@ -24,6 +25,8 @@ export interface NodeServerOptions {
   host?: string;
   homeDir?: string;
   publicUrl?: string;
+  ingressUrl?: string;
+  ingressPort?: number;
   mode?: GatewayMode;
   operatorToken?: string;
   staticDir?: string | false;
@@ -39,6 +42,7 @@ export interface RunningNodeServer {
   port: number;
   url: string;
   mcpUrl: string;
+  ingress?: { url: string; port: number; publicUrl: string };
   operatorToken: string;
   close(): Promise<void>;
 }
@@ -105,6 +109,14 @@ export async function startNodeServer(
   const llm = options.llm ?? llmFromEnv(env);
 
   const publicUrlFromEnv = options.publicUrl ?? env.AGENTFABRIC_PUBLIC_URL;
+  const ingressUrl = options.ingressUrl ?? env.AGENTFABRIC_INGRESS_URL;
+  const ingressPort = options.ingressPort ?? (env.AGENTFABRIC_INGRESS_PORT ? Number(env.AGENTFABRIC_INGRESS_PORT) : undefined);
+  if (ingressPort !== undefined && (!Number.isInteger(ingressPort) || ingressPort < 0 || ingressPort > 65535)) {
+    throw new Error(`Invalid ingress port '${ingressPort}'`);
+  }
+  if ((ingressUrl === undefined) !== (ingressPort === undefined)) {
+    throw new Error('Event ingress needs both an ingress URL and a dedicated ingress port, so the full gateway is never the public ingress');
+  }
   const buildRuntime = options.createRuntime ?? createGatewayRuntime;
 
   let handler: (request: Request) => Response | Promise<Response> = () =>
@@ -126,11 +138,13 @@ export async function startNodeServer(
   const url = `http://${displayHost.includes(':') ? `[${displayHost}]` : displayHost}:${boundPort}`;
 
   let runtime: GatewayRuntime;
+  let ingress: { server: ReturnType<typeof serve>; port: number } | undefined;
   try {
     runtime = await buildRuntime({
       mode,
       homeDir,
       publicUrl: (publicUrlFromEnv ?? url).replace(/\/+$/, ''),
+      ...(ingressUrl ? { ingressUrl } : {}),
       operatorToken,
       ...(llm ? { llm } : {}),
     });
@@ -138,7 +152,19 @@ export async function startNodeServer(
       staticDir: options.staticDir ?? defaultStaticDir(),
     });
     handler = (request) => hono.fetch(request);
+    if (ingressPort !== undefined) {
+      const ingressApp = createIngressApp(runtime);
+      const listener = serve({ fetch: (request: Request) => ingressApp.fetch(request), port: ingressPort, hostname: host });
+      ingress = { server: listener, port: ingressPort };
+      await new Promise<void>((resolve, reject) => {
+        if (listener.listening) return resolve();
+        listener.once('listening', () => resolve());
+        listener.once('error', reject);
+      });
+      ingress.port = (listener.address() as AddressInfo).port;
+    }
   } catch (error) {
+    if (ingress) await new Promise<void>((resolve) => ingress!.server.close(() => resolve()));
     await new Promise<void>((resolve) => server.close(() => resolve()));
     throw error;
   }
@@ -150,9 +176,17 @@ export async function startNodeServer(
     port: boundPort,
     url,
     mcpUrl: `${ready.publicUrl}/mcp`,
+    ...(ingress && ready.ingressUrl ? { ingress: {
+      url: `http://${displayHost.includes(':') ? `[${displayHost}]` : displayHost}:${ingress.port}`, port: ingress.port, publicUrl: ready.ingressUrl,
+    } } : {}),
     operatorToken,
     async close() {
       if ('closeAllConnections' in server) server.closeAllConnections();
+      if (ingress) {
+        const listener = ingress.server;
+        if ('closeAllConnections' in listener) listener.closeAllConnections();
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
+      }
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await ready.close();
     },
@@ -167,6 +201,7 @@ export function formatBanner(server: RunningNodeServer): string {
     rule,
     ` Mode           ${server.runtime.mode}`,
     ` MCP URL        ${server.mcpUrl}`,
+    ...(server.ingress ? [` Event ingress  ${server.ingress.publicUrl} -> ${server.ingress.url} (only POST /events/ingress/*)`] : []),
     ` Web UI         ${server.url}/`,
     ` Operator token ${server.operatorToken}`,
     ` Home           ${server.runtime.homeDir}`,

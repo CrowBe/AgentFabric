@@ -30,6 +30,9 @@ const eventPayload = z.object({
   eventId: z.string(), name: z.string(), timestamp: z.iso.datetime({ offset: true }),
   data: objectSchema, cursor: eventCursor,
 });
+const eventSubscribeSchema = z.object({
+  id: z.string().min(1).max(256), refreshBefore: z.iso.datetime({ offset: true }).optional(),
+}).passthrough();
 const eventPollSchema = z.object({
   events: z.array(eventPayload), cursor: eventCursor,
   truncated: z.boolean().default(false), hasMore: z.boolean().default(false), nextPollMs: z.number().nonnegative().optional(),
@@ -505,6 +508,25 @@ export class UpstreamManager {
       await checkSecrets(source, this.secrets);
       return await this.exclusive(source.id, undefined, async () => (await this.client(source))
         .request({ method: 'events/poll', params }, eventPollSchema, { timeout: this.timeout(source) }));
+    } catch (error) { throw await this.upstreamError(source, error); }
+  }
+
+  async subscribeEvent(event: T.McpEventTypeRecord, params: Record<string, unknown>) {
+    return this.eventRequest(event, 'events/subscribe', params, eventSubscribeSchema);
+  }
+
+  async unsubscribeEvent(event: Pick<T.McpEventTypeRecord, 'sourceId'>, params: Record<string, unknown>) {
+    await this.eventRequest(event, 'events/unsubscribe', params, z.object({}).passthrough());
+  }
+
+  private async eventRequest<S extends z.ZodType>(event: Pick<T.McpEventTypeRecord, 'sourceId'>, method: string,
+    params: Record<string, unknown>, schema: S) {
+    const source = await this.source(event.sourceId);
+    if (!source.enabled) throw new GatewayError('UPSTREAM_UNAVAILABLE', 'Source is disabled');
+    try {
+      await checkSecrets(source, this.secrets);
+      return await this.exclusive(source.id, undefined, async () => (await this.client(source))
+        .request({ method, params }, schema, { timeout: this.timeout(source) }));
     } catch (error) { throw await this.upstreamError(source, error); }
   }
 

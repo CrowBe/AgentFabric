@@ -546,6 +546,14 @@ export interface McpEventSubscriptionRecord {
   refreshBefore: string;
   expiresAt: string;
   createdAt: string;
+  relay?: McpEventRelay;
+}
+
+export interface McpEventRelay {
+  upstreamName: string;
+  ingressUrl: string;
+  secretName: string;
+  upstreamId?: string;
 }
 
 export interface PortableConfigBundle {

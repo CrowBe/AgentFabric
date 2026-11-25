@@ -45,6 +45,7 @@ export interface RuntimeOptions {
   mode: GatewayMode;
   homeDir: string;
   publicUrl: string;
+  ingressUrl?: string;
   operatorToken?: string;
   approvalTimeoutMs?: number;
   storage?: StorageAdapter;
@@ -83,10 +84,12 @@ export interface ApprovalEvent {
 export interface GatewayRuntime {
   readonly mode: GatewayMode;
   readonly publicUrl: string;
+  readonly ingressUrl?: string;
   readonly homeDir: string;
   readonly operatorToken: string;
 
   handleMcpRequest(req: Request, profileName: string | null): Promise<Response>;
+  handleEventIngress(req: Request, subscriptionId: string): Promise<Response>;
   handleOAuthProtectedResourceMetadata(req: Request): Promise<Response>;
   handleOAuthAuthorizationServerMetadata(req: Request): Promise<Response>;
   handleOAuthRegister(req: Request): Promise<Response>;
