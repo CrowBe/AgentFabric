@@ -17,6 +17,27 @@ if [[ -d "$AF_HOME" ]]; then
   ls -la "$AF_HOME" | sed -E 's/mcp-token-.*/mcp-token-* (cached client token)/' >"$AF_PROOF/home-listing.txt"
 fi
 
+# Stop the loopback boundary servers (af-oauth-upstream.mjs, af-elicit-upstream.mjs) this proof dir started.
+stop_boundary() {
+  local env_file=$1 key=$2 script=$3 label=$4 bpid bcmd
+  [[ -f "$AF_PROOF/$env_file" ]] || return 0
+  bpid=$(sed -n "s/^${key}=//p" "$AF_PROOF/$env_file")
+  if [[ "$bpid" =~ ^[0-9]+$ ]] && kill -0 "$bpid" 2>/dev/null; then
+    bcmd=$(tr '\0' ' ' <"/proc/$bpid/cmdline" 2>/dev/null)
+    if [[ "$bcmd" == *"$script $AF_PROOF"* ]]; then
+      kill -TERM "$bpid"
+      for _ in $(seq 1 10); do kill -0 "$bpid" 2>/dev/null || break; sleep 0.2; done
+    else
+      log "pid $bpid is alive but is not this run's $label; NOT killing it"
+    fi
+  fi
+  if [[ "$bpid" =~ ^[0-9]+$ ]] && kill -0 "$bpid" 2>/dev/null; then log "FAIL $label pid $bpid still running"; fail=1
+  else log "ok   $label stopped"; fi
+}
+fail=0
+stop_boundary oauth-upstream.env OAUTH_UPSTREAM_PID af-oauth-upstream.mjs "OAuth boundary server"
+stop_boundary elicit-upstream.env ELICIT_UPSTREAM_PID af-elicit-upstream.mjs "elicitation upstream"
+
 # Stop only the process this run launched.
 if kill -0 "$AF_PID" 2>/dev/null; then
   if af_pid_is_ours; then
@@ -33,7 +54,6 @@ if kill -0 "$AF_PID" 2>/dev/null; then
 fi
 [[ -f "$AF_HOME/gateway.log" ]] && af_redact <"$AF_HOME/gateway.log" >"$AF_PROOF/gateway.log"
 
-fail=0
 if kill -0 "$AF_PID" 2>/dev/null && af_pid_is_ours; then log "FAIL pid $AF_PID still running"; fail=1; else log "ok   pid $AF_PID is gone"; fi
 if ss -ltnH "sport = :$AF_PORT" 2>/dev/null | grep -q .; then
   log "WARN port $AF_PORT still has a listener (another process may have taken it)"

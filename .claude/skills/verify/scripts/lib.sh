@@ -29,9 +29,12 @@ af_token() {
   tr -d '\n' <"$AF_HOME/operator-token"
 }
 
-# Mask operator and client bearer tokens so transcripts are safe to keep.
+# Mask operator and client bearer tokens, OAuth states, auth tickets, gateway OAuth codes and
+# refresh tokens, and any provider authorization code in a URL query, so transcripts are safe to keep.
 af_redact() {
-  sed -E 's/afop_[A-Za-z0-9_-]+/afop_[REDACTED]/g; s/af_tok_[A-Za-z0-9._~+\/-]+=*/af_tok_[REDACTED]/g'
+  sed -E 's/afop_[A-Za-z0-9_-]+/afop_[REDACTED]/g; s/af_tok_[A-Za-z0-9._~+\/-]+=*/af_tok_[REDACTED]/g;
+    s/af_(oauth_state|ticket|code|refresh)_[A-Za-z0-9._~-]+/af_\1_[REDACTED]/g;
+    s/([?&]code=)[^&#[:space:]"'"'"'<>]+/\1[REDACTED]/g'
 }
 
 # Next transcript path: <proof>/transcript/NNN-<kind>-<slug>.txt

@@ -9,6 +9,7 @@ Harnesses discover and consume gateway events over the `io.modelcontextprotocol/
 - `events-push` streams `notifications/events/event` over SSE from `events/stream`.
 - `events-emit` lets the operator emit a known event type (CLI, API, or the console `Test emit` card).
 - `events-log` lists occurrences in the CLI and in the console `Occurrence log`.
+- `events-order` returns occurrences oldest first by default and newest first with `order=desc`. The console `Occurrence log` requests `order=desc&limit=100`, so the newest event stays on top past 100 rows.
 - `telemetry-traces` records each MCP call with a status such as `ok` or `validation_error`.
 - `telemetry-summary` reports totals, error rate, and per-capability breakdowns in `/api/telemetry/summary` and the console.
 
@@ -17,7 +18,7 @@ Harnesses discover and consume gateway events over the `io.modelcontextprotocol/
 - Harness: JSON-RPC `events/list`, `events/poll`, `events/stream`, and `events/subscribe` on `/mcp/<profile>`.
 - Console: **Events** (`#/events`) with cards `Event types`, `Active subscriptions`, `Occurrence log`, and `Test emit`. **Telemetry & Portability** (`#/telemetry`) with cards `Deterministic telemetry`, `Curation hints`, and `Recent traces`.
 - CLI: `agentfabric events list [--name N] [--after CURSOR] [--limit N]` and `agentfabric events emit NAME --data JSON [--source ID]`.
-- API: `GET /api/events/types|subscriptions|occurrences`, `POST /api/events/emit`, `GET /api/telemetry/summary|events|hints`.
+- API: `GET /api/events/types|subscriptions|occurrences` (`occurrences` takes `name`, `afterCursor`, `limit`, and `order=asc|desc`), `POST /api/events/emit`, `GET /api/telemetry/summary|events|hints`.
 
 ## Driving it with af-mcp.sh and af-cli.sh
 
@@ -31,6 +32,7 @@ Preconditions:
 - **Push stream.** Open a stream in the background. Run `(AF_MAX_TIME=8 $S/af-mcp.sh "$P" default events/stream '{"name":"fabric.approval.requested"}' >"$P/stream.sse" 2>/dev/null &)` and wait about 1.5 s. Then emit. Run `$S/af-cli.sh "$P" events emit fabric.approval.requested --data '{"id":"manual","status":"pending"}'`. The CLI prints `Emitted fabric.approval.requested (event <uuid>, cursor <n>)`. After the stream ends, `$P/stream.sse` holds `notifications/events/active`, then `notifications/events/event` with `"data":{"id":"manual","status":"pending"}`.
 - **Poll after the cursor.** Run `$S/af-mcp.sh "$P" default events/poll "{\"name\":\"fabric.approval.requested\",\"cursor\":\"$C\"}" | jq -c '.result|{n:(.events|length),cursor,nextPollMs}'`. `n` is at least 1, and the new cursor is higher than `$C`.
 - **Event log.** Run `$S/af-cli.sh "$P" events list --name fabric.approval.requested`. The table shows the occurrence with source `gateway`. Console second view: `node $S/af-browser.mjs "$P" 'goto:#/events' 'expect:heading:Events' 'expect-text:fabric.approval.requested' 'snap:events'`.
+- **Newest first past 100 rows.** Emit 106 events: `for i in $(seq 1 106); do $S/af-api.sh "$P" POST /api/events/emit "{\"name\":\"fabric.catalog.changed\",\"data\":{\"seq\":$i}}" >/dev/null 2>&1; done`. Then `$S/af-api.sh "$P" GET '/api/events/occurrences?name=fabric.catalog.changed&limit=3&order=desc' | jq -c '[.occurrences[].data.seq]'` prints `[106,105,104]`, while the default order starts with the oldest occurrences. `order=sideways` returns `HTTP 400` `INVALID_INPUT` (`expected one of "asc"|"desc"`). In the console, take the head cursor right before browsing, `NEWEST=$($S/af-api.sh "$P" GET '/api/events/occurrences?limit=1&order=desc' 2>/dev/null | jq -r '.occurrences[0].cursor')`, then run `node $S/af-browser.mjs "$P" 'goto:#/events' 'expect:heading:Events' "expect:rowheader:$NEWEST" 'snap:events-newest-first'`. In `events-newest-first.aria.txt`, the first data row under `table "Event occurrences"` has `rowheader "<NEWEST>"`, and the table holds 100 rows.
 - **Unknown type is refused.** Run `$S/af-cli.sh "$P" events emit verify.ping --data '{}'`. Exit `1` with `404 NOT_FOUND: Unknown event type`.
 - **Generate traces.** Make one good and one invalid call: `$S/af-mcp.sh "$P" default tools/call '{"name":"verify_echo","arguments":{"message":"trace me"}}'` and `$S/af-mcp.sh "$P" default tools/call '{"name":"verify_echo","arguments":{"message":"x","extra":1}}'`.
 - **Read telemetry.** Run `$S/af-api.sh "$P" GET /api/telemetry/summary | jq -c '{totalCalls,errorCount,errorRate}'` (`errorCount` ≥ 1) and `$S/af-api.sh "$P" GET '/api/telemetry/events?limit=5' | jq -c '.events[]|{toolName,status}'` (shows `verify_echo` with `ok` and `validation_error`).
@@ -39,6 +41,7 @@ Preconditions:
 
 ## Gotchas
 
+- Every console action emits events too (an approval decision emits `fabric.approval.decided`). Take `NEWEST` immediately before the browser run, in the same tool call, or the first row is a newer event.
 - Only the five `fabric.*` types (plus upstream-advertised ones) can be emitted. Arbitrary names return `404 Unknown event type`.
 - A poll with no cursor starts at the head and returns nothing old. Take the cursor before the action you want to observe, or pass `maxAgeMs`.
 - `events/stream` never ends by itself. `af-mcp.sh` ends it at `AF_MAX_TIME`, and curl prints `Operation timed out` (exit 28). That is expected, and the helper still reports `HTTP 200`.

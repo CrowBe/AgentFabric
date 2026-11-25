@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Send one MCP JSON-RPC request to /mcp/<profile> as a harness would, with a redacted transcript.
 # Usage: af-mcp.sh <proof-dir> <profile-id> <method> [params-json]
+#        af-mcp.sh <proof-dir> <profile-id> --respond '{"id":"<elicitation id>","result":{...}}'
+#   --respond sends a JSON-RPC response (answering a server request such as elicitation/create) with the
+#   given id and result or error; pair it with AF_MCP_SESSION set to the session that received the request.
 #   First use per profile mints a bearer token via POST /api/tokens and caches it in
 #   <home>/mcp-token-<profile> (removed with the home on cleanup).
 #   AF_MCP_TOKEN=<token>|none   use this bearer instead (none = no Authorization header)
 #   AF_MCP_VERSION=<version>    MCP-Protocol-Version header (default 2026-07-28)
 #   AF_MCP_SESSION=<id>         send Mcp-Session-Id
 #   AF_MAX_TIME=<seconds>       curl timeout (default 30); SSE methods stream until it expires
+#   AF_MCP_STREAM=<file>        also write the response body to <file> as it arrives (read an in-flight SSE
+#                               stream, e.g. an elicitation/create request, while the call is still open)
 # Stdout: response body (JSON, or SSE lines). Stderr: "HTTP <code>". Exit 0 for 2xx.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -29,13 +34,17 @@ else
 fi
 
 id="af-$(date +%s%N)"   # string id: nanosecond integers exceed JSON-RPC safe-integer ids
-if [[ -n "$params" ]]; then
+if [[ "$method" == --respond ]]; then
+  [[ -n "$params" ]] || die "--respond needs a JSON object with id and result or error"
+  body=$(jq -c '{jsonrpc:"2.0"} + .' <<<"$params") || die "--respond body is not JSON"
+elif [[ -n "$params" ]]; then
   body=$(jq -cn --arg m "$method" --arg id "$id" --argjson p "$params" '{jsonrpc:"2.0",id:$id,method:$m,params:$p}')
 else
   body=$(jq -cn --arg m "$method" --arg id "$id" '{jsonrpc:"2.0",id:$id,method:$m}')
 fi
 
-args=(-sS -N --max-time "${AF_MAX_TIME:-30}" -D "$AF_HOME/.af-mcp-headers-$id" -o "$AF_HOME/.af-mcp-body-$id" -w '%{http_code}'
+body_file=${AF_MCP_STREAM:-$AF_HOME/.af-mcp-body-$id}
+args=(-sS -N --max-time "${AF_MAX_TIME:-30}" -D "$AF_HOME/.af-mcp-headers-$id" -o "$body_file" -w '%{http_code}'
   -H 'content-type: application/json' -H 'accept: application/json, text/event-stream'
   -H "mcp-protocol-version: ${AF_MCP_VERSION:-2026-07-28}" --data-binary "$body")
 [[ "$bearer" == none ]] || args+=(-H "authorization: Bearer $bearer")
@@ -43,9 +52,12 @@ args=(-sS -N --max-time "${AF_MAX_TIME:-30}" -D "$AF_HOME/.af-mcp-headers-$id" -
 
 code=$(curl "${args[@]}" "$AF_URL/mcp/$profile") || true   # curl exits 28 when an SSE stream hits AF_MAX_TIME
 code=${code:-000}
-resp=$(cat "$AF_HOME/.af-mcp-body-$id" 2>/dev/null || true)
+resp=$(cat "$body_file" 2>/dev/null || true)
 headers=$(tr -d '\r' <"$AF_HOME/.af-mcp-headers-$id" 2>/dev/null | grep -iE '^(mcp-|www-authenticate|content-type)' || true)
 rm -f "$AF_HOME/.af-mcp-body-$id" "$AF_HOME/.af-mcp-headers-$id"
+if [[ -n "${AF_MCP_STREAM:-}" && -f "$body_file" ]]; then
+  af_redact <"$body_file" >"$body_file.redacted" && mv -f "$body_file.redacted" "$body_file"
+fi
 
 out=$(af_transcript_path mcp "$profile-$method")
 {

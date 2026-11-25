@@ -24,9 +24,20 @@ Seed these through the operator API when a feature lists them. They use only loc
 - Start every recipe from the baseline state plus the fixtures it lists.
 - MCP actions go through `$S/af-mcp.sh "$P" <profile> <method> [params]`, which mints and caches a real client token for that profile.
 - Operator actions go through the console (`node $S/af-browser.mjs "$P" …`), the REST API (`$S/af-api.sh`), or the CLI (`$S/af-cli.sh`). Use the entry point the recipe names.
-- Browser handles are ARIA roles plus exact accessible names, or field labels. Never use CSS selectors or coordinates.
+- Browser handles are ARIA roles plus exact accessible names, or field labels. Use `click-text:` with exact visible text only for controls that have no role (such as `<details>` summaries). Never use CSS selectors or coordinates.
 - Treat every command as literal. Keep quoted names, ids, and flags unchanged.
-- Blocking MCP calls (approval gates) run in the background with `AF_MAX_TIME` raised, output redirected to `$P/`.
+- Blocking MCP calls (approval gates, elicitations) run in the background with `AF_MAX_TIME` raised, output redirected to `$P/`. Set `AF_MCP_STREAM=$P/<name>.sse` to read the stream while the call is still open.
+
+## Test-only coverage
+
+Some hardening has no user path to drive. Report it under its feature ID as covered by the named test, never as driven:
+
+- `on-connect-scope` and the queued-call recheck inside the upstream concurrency queue: `tests/core/runtime.test.ts`.
+- `d1-secrets` (D1 vault ciphertext, name binding, tamper and wrong-key failures): `tests/core/d1-secrets.test.ts`.
+- `github-sparse` (sparse Git Trees fallback at `ref`, `truncated: true` failure, symlink and non-UTF-8 skips): `tests/core/github-skills.test.ts`.
+- Static symlink escapes: `tests/server/app.test.ts`.
+- Elicitation secret redaction, `notifications/cancelled`, caller disconnect, and 2026-era `input_required` upstreams: `tests/core/elicitation.test.ts`.
+- `repo-hygiene`: `tests/core/repo-hygiene.test.ts`.
 
 ## Proof and skip reporting
 
@@ -51,8 +62,12 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [MCP gateway and unified pool](./mcp-gateway-and-pool.md) covers harness auth, tools, prompts, resources, skills, the `fabric_*` discovery tools, profile scoping, and strict argument validation.
-- [Operator web dashboard and REST API](./operator-web-dashboard.md) covers the token gate, Sources & Pool, Profiles, Auth & Secrets, and the fail-closed `/api`.
-- [Safety, approvals, and proposals](./safety-approvals-and-proposals.md) covers approval policies, live approve and deny of blocked calls, and the proposal activation gate.
-- [MCP events and telemetry](./mcp-events-and-telemetry.md) covers `io.modelcontextprotocol/events` list, poll, and push, operator emit, and DuckDB trace telemetry.
-- [CLI and portability](./cli-and-portability.md) covers the `agentfabric` CLI and secret-free export and import between two instances.
+- [MCP gateway and unified pool](./mcp-gateway-and-pool.md) covers harness auth, tools, prompts, resources, skills (including GitHub `skill_repo` sources), the `fabric_*` discovery tools, profile scoping, strict argument validation, and CLI-wrapper `optionalArgs`.
+- [Operator web dashboard and REST API](./operator-web-dashboard.md) covers the token gate, Overview snippets per profile, Sources & Pool, recipes, Skills & Folders (read-only folders), Profiles, Auth & Secrets, Portability wording, the mobile layout, and the fail-closed `/api`.
+- [Safety, approvals, and proposals](./safety-approvals-and-proposals.md) covers approval policies, live approve and deny of blocked calls, the `#/safety?approval=<id>` deep link, and the proposal activation gate.
+- [MCP events and telemetry](./mcp-events-and-telemetry.md) covers `io.modelcontextprotocol/events` list, poll, and push, operator emit, the newest-first occurrence log (`order=desc`), and DuckDB trace telemetry.
+- [CLI and portability](./cli-and-portability.md) covers the `agentfabric` CLI (including `skills` and `proposals`) and secret-free export and import between two instances.
+- [MCP elicitation pass-through](./elicitation.md) covers `form` and `url` elicitations relayed over a lazily upgraded SSE stream, `requestedSchema` validation that keeps the elicitation open, `notifications/elicitation/complete`, unsafe-URL and incapable-caller declines, and session and principal binding.
+- [Credential and call lifecycle hardening](./security-lifecycle.md) covers the pre-execution recheck of held calls, auth-handoff ticket binding and input limits, gateway OAuth code redemption, token revocation on profile delete and replace import, and capability reset on retarget.
+- [Cloudflare Workers deploy, static UI hardening, and repository gates](./deploy-and-repo-gates.md) covers the Worker's fail-closed `503` gates (`AGENTFABRIC_MASTER_KEY` for the D1 vault), `run_worker_first`, CSP on console assets, static-root confinement, and the test-only gates (D1 vault crypto, GitHub sparse fallback, repo hygiene).
+- [Upstream OAuth for remote MCP sources](./upstream-oauth.md) covers the `mcp-http-oauth` recipe, operator OAuth connect, disconnect, and status, the `/auth/connect` handoff and `/auth/oauth/callback`, PKCE exchange and automatic refresh, the fail-closed managed vault names, reset on any MCP URL change, and `Disconnect` while degraded.

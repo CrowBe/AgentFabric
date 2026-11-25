@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 // Drive the AgentFabric operator web UI in headless Chromium (Playwright), one fresh tab per run.
-// Usage: af-browser.mjs <proof-dir> [--no-signin] STEP...
+// Usage: af-browser.mjs <proof-dir> [--no-signin] [--viewport <W>x<H>] STEP...
 // Steps (each one argument; names are exact accessible names):
 //   goto:<hash|path>              e.g. goto:#/sources
 //   click:<role>:<name>           e.g. click:button:Add source   click:tab:Safety & Approvals
+//                                 (a name that also matches inside an open dialog clicks the dialog's)
+//   click-text:<text>             click the element whose visible text is exactly <text>; use it only for
+//                                 controls without a role, such as a <details> summary
 //   fill:<label>=<value>          fill the field whose label is <label> (works for password inputs)
 //   expect:<role>:<name>          wait until visible, e.g. expect:heading:Sources & Pool
 //   expect-text:<text>            wait until the text is visible
 //   snap:<name>                   save <proof>/browser/<name>.png and <name>.aria.txt
 // Without --no-signin the helper first signs in through the "Operator sign-in" dialog using
-// <home>/operator-token. Console errors and failed requests go to <proof>/browser/console.txt.
+// <home>/operator-token. --viewport sets the page size (default 1360x900; e.g. 390x844 for the
+// mobile layout). Console errors and failed requests go to <proof>/browser/console.txt.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -42,7 +46,7 @@ function loadPlaywright() {
 }
 
 const [proofArg, ...rest] = process.argv.slice(2);
-if (!proofArg) fail('usage: af-browser.mjs <proof-dir> [--no-signin] STEP...');
+if (!proofArg) fail('usage: af-browser.mjs <proof-dir> [--no-signin] [--viewport <W>x<H>] STEP...');
 const proof = proofArg.replace(/\/+$/, '');
 const sessionFile = path.join(proof, 'session.env');
 if (!existsSync(sessionFile)) fail(`no session.env in ${proof}`);
@@ -52,17 +56,32 @@ const session = Object.fromEntries(
     return [key, value.join('=').replace(/^'|'$/g, '')];
   }),
 );
-const signIn = !rest.includes('--no-signin');
-const steps = rest.filter((arg) => arg !== '--no-signin');
+let signIn = true;
+let viewport = { width: 1360, height: 900 };
+const steps = [];
+for (let i = 0; i < rest.length; i += 1) {
+  const arg = rest[i];
+  if (arg === '--no-signin') signIn = false;
+  else if (arg === '--viewport' || arg.startsWith('--viewport=')) {
+    const value = arg === '--viewport' ? rest[(i += 1)] : arg.slice('--viewport='.length);
+    const match = /^(\d{2,5})x(\d{2,5})$/.exec(value ?? '');
+    if (!match) fail(`--viewport expects <W>x<H>, e.g. 390x844 (got '${value ?? ''}')`);
+    viewport = { width: Number(match[1]), height: Number(match[2]) };
+  } else steps.push(arg);
+}
 const outDir = path.join(proof, 'browser');
 mkdirSync(outDir, { recursive: true });
 const consoleLog = path.join(outDir, 'console.txt');
-const redact = (text) => text.replace(/afop_[A-Za-z0-9_-]+/g, 'afop_[REDACTED]').replace(/af_tok_[A-Za-z0-9._~+/-]+=*/g, 'af_tok_[REDACTED]');
+const redact = (text) => text
+  .replace(/afop_[A-Za-z0-9_-]+/g, 'afop_[REDACTED]')
+  .replace(/af_tok_[A-Za-z0-9._~+/-]+=*/g, 'af_tok_[REDACTED]')
+  .replace(/af_(oauth_state|ticket|code|refresh)_[A-Za-z0-9._~-]+/g, 'af_$1_[REDACTED]')
+  .replace(/([?&]code=)[^&#\s"'<>]+/g, '$1[REDACTED]');
 const record = (line) => appendFileSync(consoleLog, `${redact(line)}\n`);
 
 const { chromium } = loadPlaywright();
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+const page = await browser.newPage({ viewport });
 page.setDefaultTimeout(Number(process.env.AF_BROWSER_TIMEOUT_MS ?? 10_000));
 page.on('console', (msg) => { if (msg.type() === 'error' || msg.type() === 'warning') record(`[console.${msg.type()}] ${msg.text()}`); });
 page.on('pageerror', (error) => record(`[pageerror] ${error.message}`));
@@ -82,6 +101,17 @@ const split = (text, sep) => {
   return at < 0 ? [text, ''] : [text.slice(0, at), text.slice(at + sep.length)];
 };
 
+// When a name matches both the page and an open dialog (e.g. the "Add source" page button and the
+// dialog's submit), act on the single match inside the topmost open dialog.
+async function inDialog(build) {
+  const all = build(page);
+  if ((await all.count()) <= 1) return all;
+  const modal = page.locator('dialog[open]:visible, [role="dialog"]:visible, [role="alertdialog"]:visible').last();
+  if ((await modal.count()) === 0) return all;
+  const inside = build(modal);
+  return (await inside.count()) === 1 ? inside : all;
+}
+
 let exitCode = 0;
 try {
   await page.goto(`${session.AF_URL}/`);
@@ -99,10 +129,12 @@ try {
       await page.goto(arg.startsWith('#') ? `${session.AF_URL}/${arg}` : `${session.AF_URL}${arg}`);
     } else if (verb === 'click') {
       const [role, name] = split(arg, ':');
-      await page.getByRole(role, { name, exact: true }).click();
+      await (await inDialog((scope) => scope.getByRole(role, { name, exact: true }))).click();
+    } else if (verb === 'click-text') {
+      await (await inDialog((scope) => scope.getByText(arg, { exact: true }))).click();
     } else if (verb === 'fill') {
       const [label, value] = split(arg, '=');
-      await page.getByLabel(label, { exact: true }).fill(value);
+      await (await inDialog((scope) => scope.getByLabel(label, { exact: true }))).fill(value);
     } else if (verb === 'expect') {
       const [role, name] = split(arg, ':');
       await page.getByRole(role, { name, exact: true }).first().waitFor({ state: 'visible' });

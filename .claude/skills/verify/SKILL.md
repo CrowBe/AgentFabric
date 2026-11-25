@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Launch and drive the real AgentFabric MCP gateway the way an operator and a harness do, then capture proof. Covers the MCP endpoint (/mcp/<profile>: tools, prompts, resources, skills, fabric_search/inspect/call, events), the operator REST API (/api/*), the operator web console (headless Chromium), and the agentfabric CLI. Use it to confirm a change works in the running app, to reproduce a bug end to end, or before claiming any gateway, UI, CLI, auth, approval, events, telemetry, or portability behavior works.
+description: Launch and drive the real AgentFabric MCP gateway the way an operator and a harness do, then capture proof. Covers the MCP endpoint (/mcp/<profile>: tools, prompts, resources, skills, fabric_search/inspect/call, events, elicitation pass-through), the gateway and upstream OAuth flows, the Cloudflare Worker's fail-closed gates, the operator REST API (/api/*), the operator web console (headless Chromium), and the agentfabric CLI. Use it to confirm a change works in the running app, to reproduce a bug end to end, or before claiming any gateway, UI, CLI, auth, approval, elicitation, events, telemetry, portability, or deploy behavior works.
 ---
 
 # Verify AgentFabric
@@ -12,8 +12,8 @@ AgentFabric is one Node process (`node dist/cli/index.js start`) that serves eve
 | MCP gateway | harnesses (Claude Code, Codex, Cursor, Claude on the web) | `POST /mcp/<profile>` JSON-RPC, bearer `af_tok_…` |
 | Operator REST API | web console, CLI | `/api/*`, bearer = operator token `afop_…` |
 | Operator web console | the human operator | `/` (React app, token gate dialog "Operator sign-in") |
-| CLI | the operator in a terminal | `agentfabric status\|token\|export\|import\|approvals\|events\|recipes` |
-| OAuth + discovery | remote harnesses | `/.well-known/oauth-protected-resource/mcp/<profile>`, `/oauth/*` |
+| CLI | the operator in a terminal | `agentfabric status\|token\|export\|import\|approvals\|events\|recipes\|skills\|proposals` |
+| OAuth + discovery | remote harnesses; the operator's browser for upstream sign-in | `/.well-known/oauth-protected-resource/mcp/<profile>`, `/oauth/*`, `/auth/connect/<sourceId>`, `/auth/oauth/callback` |
 
 Every drive in this skill goes through those real user paths. All helpers live in `.claude/skills/verify/scripts/`, take the **proof directory** as their first argument, and record a redacted transcript of every call into it. The feature map in [`features/README.md`](features/README.md) lists the journeys to drive.
 
@@ -56,15 +56,18 @@ Pick the journey from [`features/README.md`](features/README.md). The helpers:
 | Helper | Drives | Example |
 | --- | --- | --- |
 | `af-api.sh "$P" METHOD PATH [JSON\|@file]` | operator REST API with the operator token. `AF_NOAUTH=1` omits it. Stdout = body, stderr = `HTTP <code>`, exit 0 only for 2xx. | `$S/af-api.sh "$P" GET /api/status` |
-| `af-mcp.sh "$P" PROFILE METHOD [PARAMS_JSON]` | one MCP JSON-RPC request to `POST /mcp/<PROFILE>` with `MCP-Protocol-Version: 2026-07-28`. First use per profile mints a client token via `POST /api/tokens` and caches it in `<home>/mcp-token-<PROFILE>`. `AF_MCP_TOKEN=<tok>\|none`, `AF_MCP_VERSION`, `AF_MCP_SESSION`, `AF_MAX_TIME` (seconds, default 30). | `$S/af-mcp.sh "$P" default tools/list` |
+| `af-mcp.sh "$P" PROFILE METHOD [PARAMS_JSON]` | one MCP JSON-RPC request to `POST /mcp/<PROFILE>` with `MCP-Protocol-Version: 2026-07-28`. First use per profile mints a client token via `POST /api/tokens` and caches it in `<home>/mcp-token-<PROFILE>`. `AF_MCP_TOKEN=<tok>\|none`, `AF_MCP_VERSION`, `AF_MCP_SESSION`, `AF_MAX_TIME` (seconds, default 30), `AF_MCP_STREAM=<file>` (write the body there as it streams, to read an in-flight `elicitation/create`). `--respond '{"id":…,"result":…}'` in place of METHOD sends a JSON-RPC response, such as an elicitation answer. | `$S/af-mcp.sh "$P" default tools/list` |
 | `af-cli.sh "$P" ARGS…` | the real `agentfabric` CLI with `--url`/`--home` appended. Exit code is the CLI's. | `$S/af-cli.sh "$P" approvals list --status pending` |
-| `node $S/af-browser.mjs "$P" [--no-signin] STEP…` | headless Chromium via Playwright. Signs in through the "Operator sign-in" dialog first unless `--no-signin`. | see below |
+| `node $S/af-browser.mjs "$P" [--no-signin] [--viewport WxH] STEP…` | headless Chromium via Playwright. Signs in through the "Operator sign-in" dialog first unless `--no-signin`. `--viewport` sets the page size (default `1360x900`; `390x844` for the mobile layout). | see below |
 | `af-db.sh "$P" state\|traces "SQL"` | read-only SQL on a **copy** of `<home>/state.db` (sqlite3) or `<home>/traces.duckdb` (`@duckdb/node-api`). | `$S/af-db.sh "$P" state "select id,status from approvals"` |
+| `node $S/af-elicit-upstream.mjs "$P" [--ttl S]` | a detached loopback MCP server (built on the repo's `@modelcontextprotocol/server`) whose `ask` tool sends `form` or `url` elicitations and whose `plain` tool does not. It stands in for an external remote MCP server only. Prints `<url>/mcp` and writes `$P/elicit-upstream.env`. `GET <base>/control/answers` lists the answers it received. `af-cleanup.sh` stops it. | see [`features/elicitation.md`](features/elicitation.md) |
+| `node $S/af-oauth-upstream.mjs "$P" [--expires-in S] [--ttl S]` | a detached loopback OAuth 2.1 provider + bearer-protected MCP server that stands in for an external upstream (the only mocked boundary). Prints its base URL and writes `$P/oauth-upstream.env`. `GET <url>/control/stats` counts grants; `POST <url>/control/revoke` invalidates access tokens. `af-cleanup.sh` stops it. | see [`features/upstream-oauth.md`](features/upstream-oauth.md) |
 
 Browser steps (one argument each, names are exact accessible names):
 
 - `goto:#/<view>` where view ∈ `overview sources skills profiles safety events auth telemetry`
-- `click:<role>:<name>` e.g. `click:tab:Safety & Approvals`, `click:button:Approve verify_echo`
+- `click:<role>:<name>` e.g. `click:tab:Safety & Approvals`, `click:button:Approve verify_echo`. When the name matches both the page and an open dialog (`Add source`), the dialog's control wins.
+- `click-text:<text>` clicks the element whose visible text is exactly `<text>`. Use it only for controls with no role, such as a `<details>` summary (`click-text:Browse skills (1)`).
 - `fill:<label>=<value>` e.g. `fill:Secret name (required)=verify_api_key`
 - `expect:<role>:<name>` e.g. `expect:heading:Sources & Pool`, `expect:article:Approval for verify_echo`
 - `expect-text:<text>` e.g. `expect-text:Nothing is waiting for approval.`
@@ -91,7 +94,7 @@ Playwright is not a repo dependency. `af-browser.mjs` loads it from `PLAYWRIGHT_
 Everything lands in the proof dir and survives Cleanup:
 
 - `launch.txt` (redacted banner, URL, PID, home, git SHA), `session.env`
-- `transcript/NNN-<api|mcp|cli|db>-<label>.txt`: the request (method, URL, JSON body), the status, MCP response headers, and the response, written by every helper call. Operator tokens (`afop_…`) and client tokens (`af_tok_…`) are masked, and so are `value` fields sent to `/api/secrets/*`.
+- `transcript/NNN-<api|mcp|cli|db>-<label>.txt`: the request (method, URL, JSON body), the status, MCP response headers, and the response, written by every helper call. Operator tokens (`afop_…`), client tokens (`af_tok_…`), upstream OAuth states (`af_oauth_state_…`), auth-handoff tickets (`af_ticket_…`), gateway OAuth codes and refresh tokens (`af_code_…`, `af_refresh_…`), and any `code=` query value are masked, and so are `value` fields sent to `/api/secrets/*`. An `AF_MCP_STREAM` file is masked the same way when its call ends. `af-browser.mjs` applies the same masking to `*.aria.txt` (including the `# <url>` line) and `console.txt`.
 - `browser/<name>.png` + `browser/<name>.aria.txt` (URL, page title, full ARIA tree), `browser/console.txt` (console errors, failed requests, HTTP ≥ 400), `browser/failure.png` on a failed step
 - `gateway.log` (redacted server log including the shutdown line), `home-listing.txt` (state files present at teardown), `cleanup.txt`
 - Anything you write yourself, such as an exported bundle: put it under `$P/`.
@@ -102,7 +105,9 @@ Proof standards:
 - Capture the action **and** the resulting state from a second view. Examples: approve in the browser, then show the blocked MCP call returned and `approvals` reads `approved` in `state.db`. Import with the CLI, then list sources over `/api`.
 - Verify side effects: rows via `af-db.sh`, traces via `/api/telemetry/*` or `af-db.sh traces`, files such as an export bundle on disk, event occurrences via `events/poll` or `agentfabric events list`.
 - Prove negative paths with their exact codes: 401 + `WWW-Authenticate` without a token, 403 `FORBIDDEN` for a token on another profile, JSON-RPC `-32602` for unexpected arguments, `-32024` `CAPABILITY_DENIED`, `-32601` for unknown methods.
-- No mocks. Upstream fixtures are real local executables (`/usr/bin/echo`, `/usr/bin/date`, `/usr/bin/uname`) or in-gateway skill sources. Only mock what a production boundary already isolates, and say so.
+- No mocks. Upstream fixtures are real local executables (`/usr/bin/echo`, `/usr/bin/date`, `/usr/bin/uname`) or in-gateway skill sources. Only mock what a production boundary already isolates, and say so. Two such stand-ins exist. `af-oauth-upstream.mjs` replaces the external OAuth provider and remote MCP server, while the gateway runs its real discovery, registration, PKCE, token exchange, vault, refresh, and MCP client code against it. `af-elicit-upstream.mjs` replaces a remote MCP server that elicits, while the gateway runs its real MCP client, SSE upgrade, session binding, and validation. The Worker checks in [`features/deploy-and-repo-gates.md`](features/deploy-and-repo-gates.md) stand in only for Cloudflare's `ASSETS` binding.
+- Some hardening has no user path (listed under "Test-only coverage" in [`features/README.md`](features/README.md)). Run the named test file and report it as test coverage under its feature ID, never as a drive.
+- GitHub skill-repo journeys (`skills add`, `skill_repo` sources and proposal activation, the console import bar) need outbound HTTPS to `api.github.com`, `codeload.github.com`, and `raw.githubusercontent.com`, and spend the 60 requests/hour unauthenticated GitHub quota. Check with `curl -s -m 5 https://api.github.com/rate_limit | jq .rate`. Without reachability, report them as blocked and run only their offline negative paths.
 - LLM drafting (`/api/policies/draft`, overlay drafts) uses `AGENTFABRIC_LLM_*`, which launch strips. With no LLM configured, drafts come from the deterministic heuristic (`draftedBy: "heuristic"`; policy drafts arrive `enabled: false`). Report LLM-backed drafting as not covered unless you launched with a real provider on purpose.
 
 Report each journey as: feature ID, entry point used, commands, observed result, artifact paths. Report a journey you could not run with the command attempted and the unmet precondition. Never report a skipped entry point as verified through a different one.
@@ -113,7 +118,7 @@ Report each journey as: feature ID, entry point used, commands, observed result,
 $S/af-cleanup.sh "$P"           # exit 0 = everything torn down, proof kept
 ```
 
-It copies the redacted `gateway.log` and a `home-listing.txt` into the proof dir. It then sends SIGTERM to `AF_PID` only if `/proc/<pid>/cmdline` is still our `dist/cli/index.js start … --home <home>`, waits up to 15 s for the graceful `Received SIGTERM, shutting down…`, and escalates to SIGKILL only for that PID. It confirms the PID is gone and the port is free, and deletes the home only if the path matches `${TMPDIR:-/tmp}/agentfabric-verify-home-*`. It confirms the proof dir still exists and writes `cleanup.txt`. It never kills by process name and never deletes the proof dir. It is idempotent: run it after every failed launch or drive too.
+It copies the redacted `gateway.log` and a `home-listing.txt` into the proof dir. It then sends SIGTERM to `AF_PID` only if `/proc/<pid>/cmdline` is still our `dist/cli/index.js start … --home <home>`, waits up to 15 s for the graceful `Received SIGTERM, shutting down…`, and escalates to SIGKILL only for that PID. It also stops the `af-oauth-upstream.mjs` and `af-elicit-upstream.mjs` servers started for this proof dir (PIDs from `oauth-upstream.env` and `elicit-upstream.env`, checked against their command lines), and fails if either survives. It confirms the PID is gone and the port is free, and deletes the home only if the path matches `${TMPDIR:-/tmp}/agentfabric-verify-home-*`. It confirms the proof dir still exists and writes `cleanup.txt`. It never kills by process name and never deletes the proof dir. It is idempotent: run it after every failed launch or drive too.
 
 Background calls you started (for example a blocked `tools/call` waiting on an approval) end when the gateway stops. Delete the proof dir yourself only when nobody needs the evidence.
 
@@ -128,11 +133,15 @@ All scripts are executable. Paths are relative to the repo root.
 .claude/skills/verify/scripts/af-mcp.sh <proof> default tools/call '{"name":"fabric_search","arguments":{"query":"echo"}}'
 .claude/skills/verify/scripts/af-cli.sh <proof> export --out <proof>/export.json
 node .claude/skills/verify/scripts/af-browser.mjs <proof> 'goto:#/auth' 'expect:heading:Auth & Secrets' 'snap:auth'
+node .claude/skills/verify/scripts/af-browser.mjs <proof> --viewport 390x844 'click:tab:Skills & Folders' 'snap:mobile-skills'
+node .claude/skills/verify/scripts/af-oauth-upstream.mjs <proof> --expires-in 3600   # → prints http://127.0.0.1:<port>
+node .claude/skills/verify/scripts/af-elicit-upstream.mjs <proof>                      # → prints http://127.0.0.1:<port>/mcp
+AF_MCP_VERSION=2025-11-25 AF_MCP_SESSION=<sid> .claude/skills/verify/scripts/af-mcp.sh <proof> default --respond '{"id":"elicitation-…","result":{"action":"decline"}}'
 .claude/skills/verify/scripts/af-db.sh <proof> traces "select status, count(*) from traces group by status"
 .claude/skills/verify/scripts/af-cleanup.sh <proof>
 ```
 
-`lib.sh` is sourced by the shell helpers (session loading, token redaction, transcript numbering, PID ownership check). Do not run it directly. Requirements: `bash`, `curl`, `jq`, `ss`, `sqlite3` (for `af-db.sh state`), Node.js 26+, and Playwright with Chromium for browser steps.
+`lib.sh` is sourced by the shell helpers (session loading, token redaction, transcript numbering, PID ownership check). Do not run it directly. Requirements: `bash`, `curl`, `jq`, `ss`, `sqlite3` (for `af-db.sh state`), `openssl` (PKCE pairs in the lifecycle journey), Node.js 26+, `npm ci` (the helpers import `@modelcontextprotocol/server` and `@hono/node-server` from the repo), and Playwright with Chromium for browser steps.
 
 Two instances side by side are supported. Each launch gets its own RUN_ID, home, port, and proof dir. The portability journey uses that.
 
