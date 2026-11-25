@@ -51,6 +51,7 @@ const relayedEvent = z.object({
 const relayControl = z.object({ type: z.enum(['verification', 'terminated']), challenge: z.string().max(512).optional() });
 const maxRelayBytes = 256 * 1024;
 const signatureToleranceSeconds = 300;
+const maxRemembered = 10_000;
 type PublicEvent = Omit<T.McpEventOccurrence, 'sourceId' | 'cursor'> & { cursor: string | null };
 type PollPage = { events: PublicEvent[]; cursor: string | null; hasMore: boolean; truncated: boolean; nextPollMs: number };
 type StreamSend = (message: Record<string, unknown>, cursor?: string) => boolean;
@@ -179,6 +180,7 @@ export class Events {
   private readonly verificationWork = new Map<string, Promise<void>>();
   private readonly retryAt = new Map<string, number>();
   private readonly messages = new Map<string, { cursor: string | null; id: string }>();
+  private readonly relayed = new Map<string, number>();
   private readonly timer: NodeJS.Timeout;
   private queue: Promise<unknown> = Promise.resolve();
   private head = Date.now() * seqPerMs;
@@ -186,7 +188,7 @@ export class Events {
 
   constructor(private readonly storage: T.StorageAdapter, private readonly secrets: T.SecretStore,
     private readonly upstream: Pick<UpstreamManager, 'pollEvent' | 'streamEvent' | 'subscribeEvent' | 'unsubscribeEvent'>,
-    private readonly publicUrl?: string) {
+    private readonly ingressUrl?: string) {
     this.timer = setInterval(() => { void this.drainWebhooks().catch(() => {}); }, 2000);
     this.timer.unref();
   }
@@ -213,7 +215,7 @@ export class Events {
     return !!token && !token.revokedAt && token.profileId === identity.profile.id && token.scopes.includes('mcp');
   }
 
-  private get relayAvailable() { return this.publicUrl?.startsWith('https://') ?? false; }
+  private get relayAvailable() { return this.ingressUrl !== undefined; }
 
   private exposedModes(type: T.McpEventTypeRecord) {
     if (type.sourceId === 'gateway') return type.supportedModes;
@@ -509,7 +511,7 @@ export class Events {
       const secretName = uri ? `webhook:${id}:${randomUUID()}` : undefined;
       const reusable = existing?.relay?.upstreamName === type.originalName ? existing.relay : undefined;
       const relay: T.McpEventRelay | undefined = uri && type.sourceId !== 'gateway' ? reusable ?? {
-        upstreamName: type.originalName, ingressUrl: `${this.publicUrl}/events/ingress/${id}`, secretName: `relay:${id}:${randomUUID()}`,
+        upstreamName: type.originalName, ingressUrl: `${this.ingressUrl}/events/ingress/${id}`, secretName: `relay:${id}:${randomUUID()}`,
       } : undefined;
       const record: Subscription = {
         id, profileId: identity.profile.id, principal: identity.principal, sourceId: type.sourceId, name: request.name,
@@ -596,6 +598,8 @@ export class Events {
     if (!messageId) return status(401);
     const upstreamId = request.headers.get('x-mcp-subscription-id');
     if (relay.upstreamId && upstreamId !== relay.upstreamId) return status(401);
+    const replayKey = `${id}\n${messageId}`;
+    if ((this.relayed.get(replayKey) ?? 0) > Date.now()) return status(200);
     let message: unknown;
     try { message = JSON.parse(body); } catch { return status(400); }
     const control = relayControl.safeParse(message);
@@ -621,8 +625,16 @@ export class Events {
       const key = signingKey(await this.secrets.get(record.secretName) ?? undefined);
       const response = await deliver(callback(record.callbackUrl), record.id, key, messageId,
         this.secrets.redactValue({ eventId, name: type.name, timestamp, data, cursor: null }));
-      return status(response.status >= 200 && response.status < 300 ? 200 : 502);
+      if (response.status < 200 || response.status >= 300) return status(502);
+      this.remember(replayKey);
+      return status(200);
     } catch { return status(502); }
+  }
+
+  private remember(key: string) {
+    const now = Date.now();
+    for (const [item, until] of this.relayed) if (until <= now || this.relayed.size >= maxRemembered) this.relayed.delete(item);
+    this.relayed.set(key, now + 2 * signatureToleranceSeconds * 1000);
   }
 
   private async notifyTerminated(record: T.McpEventSubscriptionRecord, error: { code: number; message: string }) {

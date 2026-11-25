@@ -50,6 +50,7 @@ Connection options (all commands except start and recipes):
   --json           Print raw JSON
 
 Start options: --port N  --host HOST  --public-url URL  --mode local|remote  --home DIR
+               --ingress-url HTTPS_ORIGIN  --ingress-port N   (webhook-only upstream event ingress)
 `;
 
 const OPTIONS = {
@@ -61,6 +62,8 @@ const OPTIONS = {
   port: { type: 'string' },
   host: { type: 'string' },
   'public-url': { type: 'string' },
+  'ingress-url': { type: 'string' },
+  'ingress-port': { type: 'string' },
   mode: { type: 'string' },
   profile: { type: 'string' },
   label: { type: 'string' },
@@ -209,6 +212,10 @@ export async function runCli(
       if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
         throw new CliError(`Invalid --port '${values.port}'`);
       }
+      const ingressPort = values['ingress-port'] === undefined ? undefined : Number(values['ingress-port']);
+      if (ingressPort !== undefined && (!Number.isInteger(ingressPort) || ingressPort < 0 || ingressPort > 65535)) {
+        throw new CliError(`Invalid --ingress-port '${values['ingress-port']}'`);
+      }
       if (values.mode !== undefined && values.mode !== 'local' && values.mode !== 'remote') {
         throw new CliError("--mode must be 'local' or 'remote'");
       }
@@ -217,6 +224,8 @@ export async function runCli(
         ...(values.host ? { host: values.host } : {}),
         ...(values.home ? { homeDir: values.home } : {}),
         ...(values['public-url'] ? { publicUrl: values['public-url'] } : {}),
+        ...(values['ingress-url'] ? { ingressUrl: values['ingress-url'] } : {}),
+        ...(ingressPort !== undefined ? { ingressPort } : {}),
         ...(values.mode ? { mode: values.mode } : {}),
       });
       return 0;

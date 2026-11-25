@@ -45,6 +45,7 @@ export interface RuntimeOptions {
   mode: GatewayMode;
   homeDir: string;
   publicUrl: string;
+  ingressUrl?: string;
   operatorToken?: string;
   approvalTimeoutMs?: number;
   storage?: StorageAdapter;
@@ -83,6 +84,7 @@ export interface ApprovalEvent {
 export interface GatewayRuntime {
   readonly mode: GatewayMode;
   readonly publicUrl: string;
+  readonly ingressUrl?: string;
   readonly homeDir: string;
   readonly operatorToken: string;
 

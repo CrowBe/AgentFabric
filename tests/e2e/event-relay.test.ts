@@ -35,16 +35,16 @@ beforeEach(() => {
   downstream.status = 200;
 });
 
-const publicUrl = 'https://fabric.example.test';
+const ingressUrl = 'https://fabric.example.test';
 const callbackUrl = `https://${downstream.host}/hooks`;
 const calendar = { calendarId: 'primary', agentEmail: 'agent@example.test' };
 
-async function relayGateway(options: { failSubscribe?: boolean; publicUrl?: string } = {}) {
+async function relayGateway(options: { failSubscribe?: boolean; ingress?: boolean } = {}) {
   const bearer = randomBytes(24).toString('hex');
   let gatewayUrl = '';
   const upstream = track(await startWebhookUpstream({ bearer, gatewayUrl: () => gatewayUrl, failSubscribe: options.failSubscribe }));
-  const gateway = await startGateway({ publicUrl: options.publicUrl ?? publicUrl });
-  gatewayUrl = gateway.url;
+  const gateway = await startGateway(options.ingress === false ? { publicUrl: 'https://gateway.example.test' } : { ingressUrl, ingressPort: 0 });
+  gatewayUrl = gateway.ingress?.url ?? gateway.url;
   await api(gateway, '/secrets/calendar-bridge', 'PUT', { value: bearer });
   const source = await addSource(gateway, { ...httpSource(upstream.mcpUrl, 'calendar'),
     authConfig: { kind: 'bearer_secret', secretName: 'calendar-bridge' } });
@@ -74,7 +74,7 @@ it('relays a webhook-only upstream event to a webhook subscriber with gateway-he
   const { result } = await subscribe();
   expect(result).toMatchObject({ id: expect.stringMatching(/^sub_/), refreshBefore: expect.any(String) });
   const relayed = upstream.only();
-  expect(relayed.url).toBe(`${publicUrl}/events/ingress/${result!.id}`);
+  expect(relayed.url).toBe(`${ingressUrl}/events/ingress/${result!.id}`);
   expect(relayed.arguments).toEqual(calendar);
   expect(relayed.secret).toMatch(/^whsec_/);
   expect(relayed.secret).not.toBe(secret);
@@ -145,11 +145,54 @@ it('leaves no subscription or signing material behind when the upstream refuses 
   expect((await api<{ secrets: SecretMetadata[] }>(gateway, '/secrets')).secrets.map(item => item.name)).toEqual(['calendar-bridge']);
 });
 
-it('hides webhook-only upstream events when the gateway has no public HTTPS ingress', async () => {
-  const { upstream, mcp, subscribe } = await relayGateway({ publicUrl: 'http://127.0.0.1:1' });
+it('hides webhook-only upstream events unless a dedicated ingress is configured, even behind an HTTPS public URL', async () => {
+  const { upstream, mcp, subscribe } = await relayGateway({ ingress: false });
   const listed = await mcp.result<{ events: { name: string }[] }>('events/list');
   expect(listed.events.map(event => event.name)).not.toContain(startingEvent);
   const { error } = await subscribe();
   expect(error).toMatchObject({ code: -32023 });
   expect(upstream.subscriptions.size).toBe(0);
+});
+
+it('relays a captured delivery only once, so replays inside the signature window are acknowledged but not forwarded', async () => {
+  const { upstream, subscribe } = await relayGateway();
+  await subscribe();
+  const relayed = upstream.only();
+  const occurrence = upstream.occurrence({ calendarId: 'primary', eventId: 'abc', start: '2026-12-01T09:00:00Z' });
+  const headers = sign(relayed.secret, 'msg_captured', JSON.stringify(occurrence));
+  expect((await upstream.post(relayed, occurrence, headers)).status).toBe(200);
+  const forwarded = downstream.deliveries.length;
+  expect((await upstream.post(relayed, occurrence, headers)).status).toBe(200);
+  expect(downstream.deliveries.length).toBe(forwarded);
+});
+
+it('retries a delivery the subscriber rejected instead of treating it as a replay', async () => {
+  const { upstream, subscribe } = await relayGateway();
+  await subscribe();
+  const relayed = upstream.only();
+  const occurrence = upstream.occurrence({ calendarId: 'primary', eventId: 'abc', start: '2026-12-01T09:00:00Z' });
+  downstream.status = 500;
+  expect((await upstream.post(relayed, occurrence, { 'webhook-id': 'msg_retry' })).status).toBe(502);
+  downstream.status = 200;
+  expect((await upstream.post(relayed, occurrence, { 'webhook-id': 'msg_retry' })).status).toBe(200);
+  expect(events(downstream.deliveries.map(item => JSON.parse(item.body)))).toHaveLength(2);
+});
+
+it('serves nothing but signed event ingress on the dedicated listener', async () => {
+  const { gateway } = await relayGateway();
+  const base = gateway.ingress!.url;
+  for (const [method, path] of [['GET', '/'], ['GET', '/healthz'], ['POST', '/mcp'], ['GET', '/api/sources'], ['GET', '/.well-known/oauth-authorization-server'],
+    ['POST', '/oauth/register'], ['GET', '/events/ingress/sub_00000000000000000000000000000000'], ['POST', '/events/ingress/../../api/sources']] as const) {
+    const response = await fetch(base + path, { method, headers: { authorization: `Bearer ${gateway.operatorToken}`, 'content-type': 'application/json' },
+      body: method === 'POST' ? '{}' : undefined });
+    expect(response.status, `${method} ${path}`).toBe(404);
+    expect(await response.text()).toBe('');
+  }
+  const unknown = await fetch(base + '/events/ingress/sub_00000000000000000000000000000000', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } });
+  expect(unknown.status).toBe(404);
+});
+
+it('refuses to start relay ingress without a dedicated listener', async () => {
+  await expect(startGateway({ ingressUrl })).rejects.toThrow(/dedicated ingress port/);
+  await expect(startGateway({ ingressUrl: 'http://fabric.example.test', ingressPort: 0 })).rejects.toThrow(/bare HTTPS origin/);
 });

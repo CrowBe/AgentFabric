@@ -51,6 +51,16 @@ function retargets(previous: T.SourceConfig, next: T.SourceConfig) {
   return previous.kind !== next.kind || JSON.stringify(executionTarget(previous)) !== JSON.stringify(executionTarget(next));
 }
 
+function parseIngressUrl(value: string | undefined) {
+  if (value === undefined) return undefined;
+  let url: URL;
+  try { url = new URL(value); } catch { throw new GatewayError('INVALID_INPUT', 'Invalid event ingress URL'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    throw new GatewayError('INVALID_INPUT', 'The event ingress URL must be a bare HTTPS origin');
+  }
+  return url.origin;
+}
+
 export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T.GatewayRuntime> {
   const { mode, homeDir } = options;
   const url = new URL(options.publicUrl);
@@ -58,6 +68,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     throw new GatewayError('INVALID_INPUT', 'Invalid gateway public URL');
   }
   const publicUrl = url.href.replace(/\/+$/, '');
+  const ingressUrl = parseIngressUrl(options.ingressUrl) ?? (mode === 'remote' && url.protocol === 'https:' ? publicUrl : undefined);
   const operatorToken = options.operatorToken ?? randomToken('af_tok_operator_');
   const approvalTimeout = options.approvalTimeoutMs ?? 120_000;
   if (!Number.isInteger(approvalTimeout) || approvalTimeout < 1 || approvalTimeout > 2_147_483_647) {
@@ -108,7 +119,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     const upstreamOAuth = createUpstreamOAuth({ storage, secrets, publicUrl, fetchImpl: options.oauthFetch,
       allowInsecureLocalOAuth: options.allowInsecureLocalOAuth });
     const upstreams = new UpstreamManager(storage, secrets, mode, homeDir, event => eventService.emit(event), handoffs.issue, upstreamOAuth);
-    const eventService = new Events(storage, secrets, upstreams, publicUrl);
+    const eventService = new Events(storage, secrets, upstreams, ingressUrl);
     const approvals = new Approvals(storage, secrets, publicUrl, approvalTimeout, (name, approval) => eventService.emit({
       name, sourceId: approval.sourceId,
       data: { id: approval.id, profileId: approval.profileId, capabilityId: approval.capabilityId,
@@ -271,7 +282,7 @@ export async function createGatewayRuntime(options: T.RuntimeOptions): Promise<T
     }
 
     const runtime: T.GatewayRuntime = {
-      mode, homeDir, publicUrl, operatorToken,
+      mode, homeDir, publicUrl, operatorToken, ...(ingressUrl ? { ingressUrl } : {}),
       ...oauth,
       handleMcpRequest: (request, profileName) => transport.handle(request, profileName),
       handleEventIngress: (request, subscriptionId) => eventService.ingest(subscriptionId, request),
